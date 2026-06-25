@@ -1,0 +1,1308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Xiangliu Grid v0.4.1</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f6f8;
+      --header: #f8fafc;
+      --panel: #ffffff;
+      --panel-2: #f7f9fb;
+      --field: #ffffff;
+      --field-2: #f5f7fa;
+      --ink: #1f2933;
+      --muted: #667085;
+      --line: #d9e0e7;
+      --accent: #7f1d1d;
+      --accent-2: #991b1b;
+      --accent-soft: #fff1f1;
+      --teal: #0f766e;
+      --cream: #f7f3ea;
+      --shadow: rgba(15, 23, 42, .08);
+      --preview-grid: rgba(15, 23, 42, .055);
+    }
+    body.dark {
+      color-scheme: dark;
+      --bg: #171719;
+      --header: #111113;
+      --panel: #202124;
+      --panel-2: #1d1e21;
+      --field: #151619;
+      --field-2: #111113;
+      --ink: #f2f0e9;
+      --muted: #a9a69d;
+      --line: #383b42;
+      --accent: #8b2b2b;
+      --accent-2: #a43a3a;
+      --accent-soft: #2b1f1f;
+      --teal: #2f9b8f;
+      --cream: #d4d0c4;
+      --shadow: rgba(0,0,0,.32);
+      --preview-grid: rgba(255,255,255,.07);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Microsoft YaHei UI", "Segoe UI", Arial, sans-serif;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+    header {
+      height: 88px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      background: var(--header);
+      border-bottom: 1px solid var(--line);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .brand img {
+      width: 46px;
+      height: 46px;
+      border-radius: 4px;
+      object-fit: cover;
+    }
+    h1 {
+      margin: 0;
+      font-size: 27px;
+      line-height: 1.1;
+    }
+    .version {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    nav {
+      display: flex;
+      gap: 6px;
+      background: var(--panel);
+      padding: 4px;
+      border: 1px solid var(--line);
+    }
+    .tab {
+      height: 48px;
+      min-width: 118px;
+      padding: 0 20px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 18px;
+    }
+    .tab.active {
+      background: var(--accent);
+      color: #fff;
+    }
+    .headerTools {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .themeToggle {
+      min-width: 110px;
+      background: var(--panel-2);
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    main {
+      display: grid;
+      grid-template-columns: 460px minmax(0, 1fr);
+      gap: 12px;
+      padding: 12px;
+      min-height: calc(100vh - 88px);
+    }
+    aside, section, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: 0 10px 28px var(--shadow);
+    }
+    aside {
+      padding: 12px;
+      overflow: auto;
+    }
+    section {
+      padding: 12px;
+      overflow: auto;
+    }
+    .page { display: none; }
+    .page.active { display: block; }
+    .guide {
+      margin-bottom: 14px;
+      padding: 12px 14px;
+      border-left: 4px solid var(--accent);
+      background: var(--accent-soft);
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    .guide strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--accent);
+      font-size: 17px;
+    }
+    .block {
+      padding: 18px;
+      margin-bottom: 14px;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+    }
+    .block.action {
+      background: var(--field-2);
+      border-color: var(--accent-soft);
+    }
+    .splitPage .drop { min-height: 170px; font-weight: 800; }
+    .patchPage textarea { min-height: 130px; }
+    .stitchPage .history { max-height: 160px; }
+    .quickPage .row label { margin-top: 0; }
+    .block h2, .card h2 {
+      margin: 0 0 12px;
+      color: var(--ink);
+      font-size: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    label {
+      display: block;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    input, select, textarea {
+      width: 100%;
+      margin-top: 5px;
+      border: 1px solid var(--line);
+      border-radius: 0;
+      background: var(--field);
+      color: var(--ink);
+      font: inherit;
+      font-size: 18px;
+      outline: none;
+    }
+    input, select {
+      height: 52px;
+      padding: 0 14px;
+    }
+    textarea {
+      min-height: 106px;
+      padding: 12px 14px;
+      resize: vertical;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+    button {
+      height: 52px;
+      border: 0;
+      border-radius: 0;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 800;
+      cursor: pointer;
+      padding: 0 16px;
+      font-size: 18px;
+    }
+    button:hover { background: var(--accent-2); }
+    button.secondary { background: #9f3a3a; }
+    button.secondary:hover { background: var(--accent); }
+    button.cream { background: var(--accent); color: #fff; }
+    button.red { background: var(--accent); }
+    button:disabled { opacity: .5; cursor: wait; }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .row > * { flex: 1; }
+    .drop {
+      min-height: 136px;
+      display: grid;
+      place-items: center;
+      border: 1px dashed var(--line);
+      background: var(--field-2);
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.55;
+      cursor: pointer;
+      font-size: 18px;
+    }
+    .drop.drag {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(190px, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .stat {
+      min-height: 96px;
+      padding: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+    .stat small {
+      display: block;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    .stat strong {
+      display: block;
+      margin-top: 14px;
+      font-size: 34px;
+      line-height: 1;
+      font-weight: 500;
+      word-break: break-word;
+    }
+    .stat.blue { background: #e8eef8; }
+    .stat.blue small { color: #e5e8ef; }
+    body:not(.dark) .stat.blue small { color: #52637a; }
+    body.dark .stat.blue { background: #65789d; }
+    body.dark .themeToggle {
+      background: #2a2c31;
+      color: var(--ink);
+    }
+    .previewWrap {
+      position: relative;
+      width: 100%;
+      min-height: 240px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(45deg, var(--preview-grid) 25%, transparent 25%),
+        linear-gradient(-45deg, var(--preview-grid) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, var(--preview-grid) 75%),
+        linear-gradient(-45deg, transparent 75%, var(--preview-grid) 75%),
+        var(--field-2);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+    }
+    .previewWrap img {
+      position: absolute;
+      left: 0;
+      top: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .grid {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    .tile {
+      position: absolute;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(125, 216, 196, .7);
+      background: rgba(101, 120, 157, .16);
+      color: #fff;
+      text-shadow: 0 1px 3px #000;
+      font-size: clamp(14px, 1.7vw, 22px);
+      font-weight: 900;
+      overflow: hidden;
+    }
+    .tile.pad {
+      outline: 2px solid rgba(184, 93, 82, .9);
+    }
+    .selectionBox {
+      position: absolute;
+      border: 2px solid #ef4444;
+      background: rgba(239, 68, 68, .16);
+      pointer-events: none;
+      display: none;
+      z-index: 6;
+    }
+    .result {
+      min-height: 52px;
+      max-height: 140px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      background: var(--field);
+      color: var(--ink);
+      font-size: 18px;
+      line-height: 1.6;
+      overflow: auto;
+      overflow-wrap: anywhere;
+    }
+    .comparePanel {
+      display: none;
+      margin-top: 10px;
+      padding: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+    .comparePanel.active { display: block; }
+    .compareGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+      max-height: 540px;
+      overflow: auto;
+    }
+    .compareCard {
+      border: 1px solid var(--line);
+      background: var(--field);
+      padding: 10px;
+      cursor: zoom-in;
+    }
+    .compareCard img {
+      display: block;
+      width: 100%;
+      height: 310px;
+      object-fit: contain;
+      background: var(--field-2);
+      border: 1px solid var(--line);
+    }
+    .compareCard strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 16px;
+    }
+    .compareCard small {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .comparePanel .caption {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.5;
+    }
+    pre {
+      min-height: 52px;
+      max-height: 140px;
+      margin: 0;
+      overflow: auto;
+      padding: 16px;
+      background: var(--field);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      white-space: pre-wrap;
+      font-size: 15px;
+      line-height: 1.5;
+    }
+    .history {
+      max-height: 260px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      background: var(--field);
+    }
+    .history button {
+      width: 100%;
+      height: auto;
+      padding: 14px;
+      text-align: left;
+      background: transparent;
+      border-bottom: 1px solid var(--line);
+      color: var(--ink);
+      font-weight: 600;
+      font-size: 18px;
+    }
+    .history small {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 15px;
+      overflow-wrap: anywhere;
+    }
+    .check {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    .check input {
+      width: 22px;
+      height: 22px;
+      margin: 0;
+    }
+    @media (max-width: 980px) {
+      header { height: auto; min-height: 88px; align-items: flex-start; flex-direction: column; gap: 12px; padding: 18px; }
+      main { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      nav { width: 100%; }
+      .headerTools { width: 100%; flex-wrap: wrap; }
+      .tab { flex: 1; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="/assets/logo.png" alt="">
+      <div>
+        <h1>Xiangliu Grid</h1>
+        <div class="version">Xiangliu Grid v0.4.1</div>
+      </div>
+    </div>
+    <div class="headerTools">
+    <nav>
+      <button class="tab active" data-page="splitPage">1 图块裁切</button>
+      <button class="tab" data-page="stitchPage">2 整图拼合</button>
+      <button class="tab" data-page="quickPage">3 行列裁切</button>
+    </nav>
+    <button id="themeToggle" class="themeToggle" type="button">深色</button>
+    </div>
+  </header>
+
+  <main>
+    <aside>
+      <div id="splitPage" class="page splitPage active">
+        <div class="guide">
+          <strong>把原始大图切成稳定编号的 2048 图块。</strong>
+          适合项目主流程第一步：生成 tiles、manifest 和带虚线文件名的定位总览图。
+        </div>
+        <div class="block">
+          <h2>原始大图</h2>
+          <div id="drop" class="drop">拖入图片<br>或选择本地原图</div>
+          <input id="file" type="file" accept="image/*,.tif,.tiff,.png,.jpg,.jpeg" hidden>
+          <label>原图路径</label>
+          <input id="path" placeholder="C:\path\to\master-image.tif">
+          <div class="row" style="margin-top:10px">
+            <button id="pickImage">选择</button>
+            <button id="inspect" class="secondary">读取</button>
+            <button id="clear" class="secondary">清空</button>
+          </div>
+        </div>
+        <div class="block action">
+          <h2>图块规则与输出</h2>
+          <div class="row">
+            <label>块尺寸<input id="longEdge" type="number" min="256" value="2048"></label>
+            <label>重叠<input id="overlap" type="number" min="0" max="512" value="20"></label>
+          </div>
+          <label>任务名</label>
+          <input id="jobName" placeholder="xiangliu_grid_tiles">
+          <label>输出文件夹</label>
+          <input id="splitOutput" placeholder="不填则输出到工具 outputs 目录">
+          <div class="row" style="margin-top:10px">
+            <button id="pickSplitOutput" class="secondary">选择输出</button>
+            <button id="plan">预览编号</button>
+            <button id="split" class="red">开始切分</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="patchPage" class="page patchPage">
+        <div class="guide">
+          <strong>把修复后的小图自动找位置，回贴成新版 tiles。</strong>
+          先加载候选图，在右侧预览上拖框圈出小图可能所在区域；系统会自动换算候选图块，再生成定位预览。
+        </div>
+        <div class="block">
+          <h2>当前图块版本</h2>
+          <label>tiles_manifest.json</label>
+          <input id="patchManifest" placeholder="...\outputs\...\tiles_manifest.json">
+          <button id="pickPatchManifest" class="secondary" style="width:100%; margin-top:8px">选择 manifest</button>
+          <label>当前 tiles 文件夹</label>
+          <input id="patchTiles" placeholder="...\outputs\...\tiles or ...\patch_runs\run_001\tiles">
+          <button id="pickPatchTiles" class="secondary" style="width:100%; margin-top:8px">选择 tiles 文件夹</button>
+          <button id="loadPatchSelector" style="width:100%; margin-top:8px">加载候选图并框选范围</button>
+        </div>
+        <div class="block">
+          <h2>修复小图与候选范围</h2>
+          <label>修复后的小图</label>
+          <input id="patchImage" placeholder="C:\path\to\restored_patch.png">
+          <button id="pickPatchImage" class="secondary" style="width:100%; margin-top:8px">选择小图</button>
+          <label>候选图块编号</label>
+          <textarea id="patchCandidates" placeholder="在右侧候选图上拖框后会自动填入，也可手动输入 R03_C05, R03_C06"></textarea>
+        </div>
+        <div class="block action">
+          <h2>定位预览与新版输出</h2>
+          <label>本次回贴名称</label>
+          <input id="patchRunName" placeholder="face_fix">
+          <label>回贴输出文件夹</label>
+          <input id="patchOutput" placeholder="不填则输出到 manifest 同级 patch_runs">
+          <button id="pickPatchOutput" class="secondary" style="width:100%; margin-top:8px">选择输出</button>
+          <label>最低置信度</label>
+          <input id="patchMinScore" type="number" min="0" max="1" step="0.01" value="0.28">
+          <div class="row" style="margin-top:10px">
+            <button id="patchPreview">生成定位预览</button>
+            <button id="patchApply" class="red">确认回贴并输出新版 tiles</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="stitchPage" class="page stitchPage">
+        <div class="guide">
+          <strong>把当前 tiles 文件夹拼回大图。</strong>
+          用原始 manifest 定位图块；如果做过局部回贴，请选择最新的 patch_runs/run_###/tiles。
+        </div>
+        <div class="block">
+          <h2>拼合依据</h2>
+          <div id="history" class="history"></div>
+          <label>tiles_manifest.json</label>
+          <input id="manifest" placeholder="...\outputs\...\tiles_manifest.json">
+          <button id="pickManifest" class="secondary" style="width:100%; margin-top:8px">选择 manifest</button>
+        </div>
+        <div class="block">
+          <h2>图块来源</h2>
+          <label>当前 tiles 文件夹</label>
+          <input id="restored" placeholder="可直接输入路径，也可点选择">
+          <button id="pickRestored" class="secondary" style="width:100%; margin-top:8px">选择文件夹</button>
+          <label>指定编号</label>
+          <textarea id="selectedTiles" placeholder="R01_C01, R01_C02, R02_C01"></textarea>
+        </div>
+        <div class="block action">
+          <h2>拼合设置与输出</h2>
+          <label>拼合模式</label>
+          <select id="stitchMode">
+            <option value="local">局部拼合</option>
+            <option value="full" selected>回填整图</option>
+            <option value="complete">完整拼合</option>
+          </select>
+          <div class="row">
+            <label>重叠处理
+              <select id="blendMode">
+                <option value="feather" selected>20px 羽化</option>
+                <option value="overwrite">硬拼覆盖</option>
+              </select>
+            </label>
+            <label>羽化像素<input id="featherPx" type="number" min="0" max="512" value="20"></label>
+          </div>
+          <label>补色边处理
+            <select id="trimPadding">
+              <option value="false" selected>保留补色边（输出 working 尺寸）</option>
+              <option value="true">裁掉补色边（输出原图尺寸，调色不受补色干扰）</option>
+            </select>
+          </label>
+          <label>颜色统一</label>
+          <select id="colorMode">
+            <option value="none">不处理</option>
+            <option value="seam_balance" selected>接缝平衡（推荐）：相邻块 RGB 偏移 + 宽羽化</option>
+            <option value="lab_reinhard">Lab Reinhard 色彩迁移（备选）</option>
+            <option value="rgb_stats">基础模式：RGB 均值/标准差匹配</option>
+          </select>
+          <label id="seamStrengthLabel">接缝平衡强度
+            <select id="seamStrength">
+              <option value="light">轻度（max_bias=10，保守）</option>
+              <option value="standard" selected>标准（max_bias=18）</option>
+              <option value="strong">强力（max_bias=24，羽化120）</option>
+            </select>
+          </label>
+          <label>低频颜色场校正（消除大面积明暗/色温漂移，拼合后对整图生效）
+            <select id="lowFreqStrength">
+              <option value="0" selected>关闭</option>
+              <option value="0.3">轻度（0.3）</option>
+              <option value="0.5">标准（0.5）</option>
+              <option value="0.7">较强（0.7）</option>
+              <option value="1.0">强力（1.0，完全校正）</option>
+            </select>
+          </label>
+          <label>调色图块（留空=全部调色，指定=仅对这些图块调色；接缝平衡建议留空）</label>
+          <textarea id="colorTiles" placeholder="留空则全部调色；例如 R04_C01, R04_C02, R04_C03 仅调色第四行"></textarea>
+          <label>参考图路径（仅 Lab Reinhard / RGB stats 模式使用，接缝平衡不需要）</label>
+          <input id="referencePath" placeholder="可选。选择后按这张参考图统一；不选则按原始大图对应区域统一">
+          <button id="pickReference" class="secondary" style="width:100%; margin-top:8px">选择参考图</button>
+          <label>拼合输出文件夹</label>
+          <input id="stitchOutput" placeholder="不填则输出到 manifest 同级 stitched 目录">
+          <button id="pickStitchOutput" class="secondary" style="width:100%; margin-top:8px">选择输出</button>
+          <label>输出文件名</label>
+          <input id="outName" value="stitched_result.png">
+          <button id="stitch" class="cream" style="width:100%; margin-top:10px">开始拼合</button>
+        </div>
+      </div>
+
+      <div id="quickPage" class="page quickPage">
+        <div class="guide">
+          <strong>把任意图片按指定行列直接裁开。</strong>
+          这是独立的小工具，不做羽化、回贴或颜色统一，适合临时把图片切成 1x3、2x2、3x4 等固定网格。
+        </div>
+        <div class="block">
+          <h2>待裁图片</h2>
+          <label>待再次切分图片</label>
+          <input id="quickPath" placeholder="拼合完成的大图或任意图片">
+          <div class="row" style="margin-top:10px">
+            <button id="pickQuickImage">选择</button>
+            <button id="inspectQuick" class="secondary">读取</button>
+          </div>
+        </div>
+        <div class="block action">
+          <h2>行列规则与输出</h2>
+          <div class="row">
+            <label>行数<input id="quickRows" type="number" min="1" value="1"></label>
+            <label>列数<input id="quickCols" type="number" min="1" value="3"></label>
+          </div>
+          <label>任务名</label>
+          <input id="quickJobName" placeholder="restitch_cut">
+          <label>输出文件夹</label>
+          <input id="quickOutput" placeholder="不填则输出到工具 outputs 目录">
+          <div class="row" style="margin-top:10px">
+            <button id="pickQuickOutput" class="secondary">选择输出</button>
+            <button id="quickPlan">预览</button>
+            <button id="quickSplit" class="red">快速切分</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <section>
+      <div class="stats">
+        <div class="stat blue"><small id="labelSize">图像尺寸</small><strong id="size">-</strong></div>
+        <div class="stat"><small id="labelGrid">网格</small><strong id="gridStat">-</strong></div>
+        <div class="stat"><small id="labelWork">工作画布</small><strong id="workSize">-</strong></div>
+        <div class="stat"><small id="labelPadding">右/下留白</small><strong id="paddingSize">-</strong></div>
+        <div class="stat"><small id="labelTile">模型块</small><strong id="tileSize">-</strong></div>
+        <div class="stat"><small id="labelStride">步长</small><strong id="strideSize">-</strong></div>
+        <div class="stat"><small id="labelOverlap">重叠</small><strong id="overlapStat">-</strong></div>
+        <div class="stat"><small id="labelScale">缩放</small><strong id="scaleStat">-</strong></div>
+      </div>
+      <div id="previewWrap" class="previewWrap">
+        <img id="preview" alt="">
+        <div id="grid" class="grid"></div>
+        <div id="selectionBox" class="selectionBox"></div>
+      </div>
+      <div id="comparePanel" class="comparePanel">
+        <h2>Color Before / After</h2>
+        <div id="compareGrid" class="compareGrid"></div>
+        <div id="compareCaption" class="caption"></div>
+      </div>
+      <div class="row" style="margin-top:10px; align-items:stretch">
+        <div class="card" style="flex:1; padding:12px">
+          <h2>Output</h2>
+          <div id="result" class="result">-</div>
+        </div>
+        <div class="card" style="flex:1; padding:12px">
+          <h2>Status</h2>
+          <pre id="log"></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let currentPath = "";
+    let quickPath = "";
+    let patchSelector = null;
+    let patchDragStart = null;
+
+    function applyTheme(theme) {
+      const dark = theme === "dark";
+      document.body.classList.toggle("dark", dark);
+      $("themeToggle").textContent = dark ? "浅色" : "深色";
+      localStorage.setItem("xiangliu-theme", dark ? "dark" : "light");
+    }
+
+    applyTheme(localStorage.getItem("xiangliu-theme") || "light");
+    $("themeToggle").addEventListener("click", () => {
+      applyTheme(document.body.classList.contains("dark") ? "light" : "dark");
+    });
+
+    function log(message, data) {
+      const now = new Date().toLocaleTimeString();
+      $("log").textContent += `[${now}] ${message}\n`;
+      if (data) $("log").textContent += `${JSON.stringify(data, null, 2)}\n`;
+      $("log").scrollTop = $("log").scrollHeight;
+    }
+
+    function setResult(data) {
+      if (!data) {
+        $("result").textContent = "-";
+        return;
+      }
+      if (data.summary) {
+        $("result").innerHTML = data.summary;
+        return;
+      }
+      $("result").textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+    }
+
+    function setStatLabels(mode) {
+      const splitLabels = ["图像尺寸", "网格", "工作画布", "右/下留白", "模型块", "步长", "重叠", "缩放"];
+      const stitchLabels = ["输出尺寸", "已拼图块", "拼合模式", "缺失图块", "调色算法", "调色状态", "羽化像素", "重叠处理"];
+      const labels = mode === "stitch" ? stitchLabels : splitLabels;
+      ["labelSize","labelGrid","labelWork","labelPadding","labelTile","labelStride","labelOverlap","labelScale"].forEach((id, index) => {
+        $(id).textContent = labels[index];
+      });
+    }
+
+    async function post(url, payload) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    async function get(url) {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    function setBusy(isBusy) {
+      document.querySelectorAll("button").forEach(btn => btn.disabled = isBusy);
+    }
+
+    async function pickFile(kind) {
+      const data = await post("/api/pick-file", {kind});
+      return data.path || "";
+    }
+
+    async function pickFolder(title) {
+      const data = await post("/api/pick-folder", {title});
+      return data.path || "";
+    }
+
+    function updateStats(plan) {
+      setStatLabels("split");
+      $("size").textContent = `${plan.width} x ${plan.height}`;
+      $("gridStat").textContent = `${plan.cols}列 x ${plan.rows}行 = ${plan.pieces}`;
+      $("workSize").textContent = `${plan.working_width} x ${plan.working_height}`;
+      $("paddingSize").textContent = `${plan.canvas_padding_right}px / ${plan.canvas_padding_bottom}px`;
+      $("tileSize").textContent = `${plan.tile_width} x ${plan.tile_height}`;
+      $("strideSize").textContent = `${plan.stride_width} x ${plan.stride_height}`;
+      $("overlapStat").textContent = `${plan.overlap_original_px}px`;
+      $("scaleStat").textContent = "不缩放";
+    }
+
+    function updateStitchStats(result) {
+      setStatLabels("stitch");
+      $("size").textContent = `${result.canvas_width} x ${result.canvas_height}`;
+      $("gridStat").textContent = `已拼 ${result.pasted} 块`;
+      $("workSize").textContent = result.mode;
+      $("paddingSize").textContent = result.missing && result.missing.length ? `缺 ${result.missing.length} 块` : "无缺块";
+      $("tileSize").textContent = result.color_mode === "none" ? "未启用" : result.color_mode;
+      $("strideSize").textContent = result.color_applied ? `成功 ${result.color_matched_tiles} 块` : "未执行";
+      $("overlapStat").textContent = `${result.feather_px}px`;
+      $("scaleStat").textContent = result.blend_mode || "-";
+    }
+
+    function showOutputPreview(result) {
+      const wrap = $("previewWrap");
+      const preview = $("preview");
+      patchSelector = null;
+      $("grid").innerHTML = "";
+      $("selectionBox").style.display = "none";
+      wrap.style.aspectRatio = `${result.canvas_width} / ${result.canvas_height}`;
+      preview.removeAttribute("style");
+      if (result.preview_url) preview.src = result.preview_url + "&t=" + Date.now();
+    }
+
+    function showPatchPreview(result) {
+      const wrap = $("previewWrap");
+      const preview = $("preview");
+      patchSelector = null;
+      $("grid").innerHTML = "";
+      $("selectionBox").style.display = "none";
+      if (result.region) {
+        wrap.style.aspectRatio = `${result.region.width} / ${result.region.height}`;
+        $("size").textContent = `${result.region.width} x ${result.region.height}`;
+      }
+      $("gridStat").textContent = result.candidate_tiles ? result.candidate_tiles.join(", ") : "-";
+      $("workSize").textContent = result.patch_size ? `${result.patch_size[0]} x ${result.patch_size[1]}` : "-";
+      $("paddingSize").textContent = result.match ? `${result.match.x}, ${result.match.y}` : "-";
+      $("tileSize").textContent = result.match ? `${result.match.score}` : "-";
+      $("strideSize").textContent = result.match ? result.match.method : "-";
+      $("overlapStat").textContent = result.output_tiles_dir ? "applied" : "preview";
+      $("scaleStat").textContent = result.output_tiles_dir || result.run_dir || "-";
+      preview.removeAttribute("style");
+      if (result.preview_url) preview.src = result.preview_url + "&t=" + Date.now();
+      $("comparePanel").classList.remove("active");
+    }
+
+    function showPatchSelector(data) {
+      patchSelector = data;
+      const wrap = $("previewWrap");
+      const preview = $("preview");
+      $("grid").innerHTML = "";
+      $("selectionBox").style.display = "none";
+      wrap.style.aspectRatio = `${data.width} / ${data.height}`;
+      preview.removeAttribute("style");
+      preview.src = data.preview_url + "&t=" + Date.now();
+      $("size").textContent = `${data.width} x ${data.height}`;
+      $("gridStat").textContent = `可选 ${data.tiles.length} 块`;
+      $("workSize").textContent = `已加载 ${data.loaded_tiles.length} 块`;
+      $("paddingSize").textContent = "拖框选范围";
+      $("tileSize").textContent = "-";
+      $("strideSize").textContent = "-";
+      $("overlapStat").textContent = "-";
+      $("scaleStat").textContent = "候选图";
+      setResult({summary: "候选图已加载。请在右侧预览图上拖框，系统会自动填入覆盖到的图块编号。"});
+      log("候选图已加载", data);
+    }
+
+    async function loadPatchSelector() {
+      const data = await post("/api/patch-selector-map", {
+        manifest_path: $("patchManifest").value.trim(),
+        tiles_dir: $("patchTiles").value.trim()
+      });
+      showPatchSelector(data);
+      return data;
+    }
+
+    function selectPatchTilesFromBox(rect) {
+      if (!patchSelector || !patchSelector.tiles) return;
+      const wrap = $("previewWrap");
+      const sx = patchSelector.width / wrap.clientWidth;
+      const sy = patchSelector.height / wrap.clientHeight;
+      const box = {
+        x1: Math.min(rect.x1, rect.x2) * sx,
+        y1: Math.min(rect.y1, rect.y2) * sy,
+        x2: Math.max(rect.x1, rect.x2) * sx,
+        y2: Math.max(rect.y1, rect.y2) * sy
+      };
+      const selected = patchSelector.tiles.filter(tile => {
+        const tx1 = tile.x, ty1 = tile.y, tx2 = tile.x + tile.w, ty2 = tile.y + tile.h;
+        return tx1 < box.x2 && tx2 > box.x1 && ty1 < box.y2 && ty2 > box.y1;
+      }).map(tile => tile.tile_id);
+      $("patchCandidates").value = selected.join(", ");
+      $("gridStat").textContent = selected.length ? selected.join(", ") : "未选中图块";
+      log("已根据框选范围填入候选图块", {selected_tiles: selected});
+    }
+
+    async function runPatchAlign(apply) {
+      const result = await post(apply ? "/api/patch-align-apply" : "/api/patch-align-preview", {
+        manifest_path: $("patchManifest").value.trim(),
+        tiles_dir: $("patchTiles").value.trim(),
+        patch_path: $("patchImage").value.trim(),
+        candidate_tiles: $("patchCandidates").value.trim(),
+        run_name: $("patchRunName").value.trim(),
+        output_base: $("patchOutput").value.trim(),
+        min_score: Number($("patchMinScore").value)
+      });
+      showPatchPreview(result);
+      if (result.output_tiles_dir) {
+        $("restored").value = result.output_tiles_dir;
+        $("patchTiles").value = result.output_tiles_dir;
+      }
+      setResult(result);
+      log(apply ? "局部回贴完成" : "定位预览已生成", result);
+      return result;
+    }
+
+    function showColorCompare(result) {
+      const panel = $("comparePanel");
+      const grid = $("compareGrid");
+      const caption = $("compareCaption");
+      grid.innerHTML = "";
+      if (!result.color_compare_preview_url) {
+        panel.classList.remove("active");
+        caption.textContent = result.color_mode === "none" ? "颜色统一未启用。" : "没有生成调色对比图。";
+        return;
+      }
+      panel.classList.add("active");
+      (result.color_compare_items || []).forEach(item => {
+        const card = document.createElement("div");
+        card.className = "compareCard";
+        card.innerHTML = `
+          <strong>${item.tile_id}</strong>
+          <img src="${item.preview_url}&t=${Date.now()}" alt="${item.tile_id}">
+          <small>before ${JSON.stringify(item.before_rgb_mean)}<br>after ${JSON.stringify(item.after_rgb_mean)}<br>delta ${JSON.stringify(item.delta_rgb_mean)}</small>
+        `;
+        card.ondblclick = () => window.open(item.preview_url, "_blank");
+        grid.appendChild(card);
+      });
+      const ids = (result.color_tile_ids || []).slice(0, 12).join(", ");
+      caption.textContent = `已调色 ${result.color_matched_tiles} 块。每张卡片依次为 before / after / reference，双击卡片可放大。示例图块：${ids}`;
+    }
+
+    function layoutPreview(plan) {
+      const wrap = $("previewWrap");
+      const preview = $("preview");
+      wrap.style.aspectRatio = `${plan.working_width} / ${plan.working_height}`;
+      preview.style.width = `${(plan.width / plan.working_width) * 100}%`;
+      preview.style.height = `${(plan.height / plan.working_height) * 100}%`;
+      preview.style.left = `${(plan.canvas_padding_x / plan.working_width) * 100}%`;
+      preview.style.top = `${(plan.canvas_padding_y / plan.working_height) * 100}%`;
+    }
+
+    function drawGrid(plan) {
+      const grid = $("grid");
+      grid.innerHTML = "";
+      for (let r = 1; r <= plan.rows; r++) {
+        for (let c = 1; c <= plan.cols; c++) {
+          const cell = document.createElement("div");
+          const manualGrid = plan.layout_mode === "manual_grid";
+          const x = manualGrid ? plan.working_width * (c - 1) / plan.cols : (c - 1) * plan.stride_width;
+          const y = manualGrid ? plan.working_height * (r - 1) / plan.rows : (r - 1) * plan.stride_height;
+          const w = manualGrid ? plan.working_width / plan.cols : plan.tile_width;
+          const h = manualGrid ? plan.working_height / plan.rows : plan.tile_height;
+          cell.className = "tile";
+          if (c === plan.cols || r === plan.rows) cell.classList.add("pad");
+          cell.textContent = `R${String(r).padStart(2, "0")}_C${String(c).padStart(2, "0")}`;
+          cell.style.left = `${x / plan.working_width * 100}%`;
+          cell.style.top = `${y / plan.working_height * 100}%`;
+          cell.style.width = `${w / plan.working_width * 100}%`;
+          cell.style.height = `${h / plan.working_height * 100}%`;
+          grid.appendChild(cell);
+        }
+      }
+    }
+
+    async function inspectPath(path, target = "main") {
+      setBusy(true);
+      try {
+        const info = await post("/api/inspect", {path});
+        if (target === "quick") {
+          quickPath = info.path;
+          $("quickPath").value = info.path;
+          $("quickJobName").placeholder = `${info.filename.replace(/\.[^.]+$/, "")}_cut`;
+        } else {
+          currentPath = info.path;
+          $("path").value = info.path;
+          $("jobName").placeholder = `${info.filename.replace(/\.[^.]+$/, "")}_tiles`;
+        }
+        $("preview").src = info.preview_url + "&t=" + Date.now();
+        log("图像读取成功", info);
+        await plan(target);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function plan(target = "main") {
+      const isQuick = target === "quick";
+      const path = isQuick ? (quickPath || $("quickPath").value.trim()) : (currentPath || $("path").value.trim());
+      if (!path) throw new Error("请先选择或输入图片路径");
+      const planData = isQuick
+        ? await post("/api/grid-plan", {
+            path,
+            rows: Number($("quickRows").value),
+            cols: Number($("quickCols").value)
+          })
+        : await post("/api/plan", {
+            path,
+            target_pieces: 0,
+            long_edge: Number($("longEdge").value),
+            overlap: Number($("overlap").value),
+            allow_upscale: false,
+            strict_count: false
+          });
+      updateStats(planData);
+      layoutPreview(planData);
+      drawGrid(planData);
+      log("编号预览已更新", {
+        pieces: planData.pieces,
+        grid: `${planData.cols}x${planData.rows}`,
+        working_size: `${planData.working_width}x${planData.working_height}`
+      });
+      return planData;
+    }
+
+    async function splitCurrent(target = "main") {
+      const isQuick = target === "quick";
+      await plan(target);
+      const path = isQuick ? (quickPath || $("quickPath").value.trim()) : (currentPath || $("path").value.trim());
+      const result = isQuick
+        ? await post("/api/split-grid", {
+            path,
+            rows: Number($("quickRows").value),
+            cols: Number($("quickCols").value),
+            job_name: $("quickJobName").value.trim(),
+            output_base: $("quickOutput").value.trim()
+          })
+        : await post("/api/split", {
+            path,
+            target_pieces: 0,
+            long_edge: Number($("longEdge").value),
+            overlap: Number($("overlap").value),
+            allow_upscale: false,
+            strict_count: false,
+            job_name: (isQuick ? $("quickJobName").value : $("jobName").value).trim(),
+            output_base: (isQuick ? $("quickOutput").value : $("splitOutput").value).trim()
+          });
+      $("manifest").value = result.manifest_json;
+      $("restored").value = result.tiles_dir;
+      $("patchManifest").value = result.manifest_json;
+      $("patchTiles").value = result.tiles_dir;
+      setResult({
+        tiles_dir: result.tiles_dir,
+        manifest_json: result.manifest_json,
+        manifest_csv: result.manifest_csv,
+        locator_map: result.locator_map
+      });
+      if (result.locator_preview_url) {
+        $("preview").src = result.locator_preview_url + "&t=" + Date.now();
+      }
+      log("切分完成", result);
+      await loadHistory();
+    }
+
+    async function uploadFile(file) {
+      setBusy(true);
+      try {
+        log(`开始上传：${file.name}`);
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          headers: {"X-Filename": encodeURIComponent(file.name)},
+          body: file
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        await inspectPath(data.path);
+      } catch (err) {
+        log("上传/读取失败：" + err.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadHistory() {
+      const box = $("history");
+      box.innerHTML = "";
+      try {
+        const data = await get("/api/history");
+        if (!data.items.length) {
+          box.innerHTML = "<button type='button'>暂无历史记录</button>";
+          return;
+        }
+        data.items.forEach(item => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.innerHTML = `${item.job_name || "manifest"}<small>${item.manifest_json}</small>`;
+          btn.addEventListener("click", () => {
+            $("manifest").value = item.manifest_json || "";
+            $("restored").value = item.tiles_dir || "";
+            setResult(item.manifest_json || "");
+          });
+          box.appendChild(btn);
+        });
+      } catch (err) {
+        box.innerHTML = `<button type="button">暂无历史记录<small>如果一直显示这里，请重启 Xiangliu Grid</small></button>`;
+      }
+    }
+
+    document.querySelectorAll(".tab").forEach(tab => {
+      tab.addEventListener("click", async () => {
+        document.querySelectorAll(".tab").forEach(item => item.classList.remove("active"));
+        document.querySelectorAll(".page").forEach(item => item.classList.remove("active"));
+        tab.classList.add("active");
+        $(tab.dataset.page).classList.add("active");
+        if (tab.dataset.page === "stitchPage") await loadHistory();
+      });
+    });
+
+    $("previewWrap").addEventListener("mousedown", (e) => {
+      if (!patchSelector) return;
+      if (!document.getElementById("patchPage").classList.contains("active")) return;
+      const rect = $("previewWrap").getBoundingClientRect();
+      patchDragStart = {x: e.clientX - rect.left, y: e.clientY - rect.top};
+      const box = $("selectionBox");
+      box.style.display = "block";
+      box.style.left = `${patchDragStart.x}px`;
+      box.style.top = `${patchDragStart.y}px`;
+      box.style.width = "0px";
+      box.style.height = "0px";
+      e.preventDefault();
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!patchDragStart || !patchSelector) return;
+      const rect = $("previewWrap").getBoundingClientRect();
+      const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+      const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+      const left = Math.min(patchDragStart.x, x);
+      const top = Math.min(patchDragStart.y, y);
+      const box = $("selectionBox");
+      box.style.left = `${left}px`;
+      box.style.top = `${top}px`;
+      box.style.width = `${Math.abs(x - patchDragStart.x)}px`;
+      box.style.height = `${Math.abs(y - patchDragStart.y)}px`;
+    });
+    window.addEventListener("mouseup", (e) => {
+      if (!patchDragStart || !patchSelector) return;
+      const rect = $("previewWrap").getBoundingClientRect();
+      const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+      const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+      selectPatchTilesFromBox({x1: patchDragStart.x, y1: patchDragStart.y, x2: x, y2: y});
+      patchDragStart = null;
+    });
+
+    $("drop").addEventListener("click", () => $("file").click());
+    $("drop").addEventListener("dragover", (e) => { e.preventDefault(); $("drop").classList.add("drag"); });
+    $("drop").addEventListener("dragleave", () => $("drop").classList.remove("drag"));
+    $("drop").addEventListener("drop", async (e) => {
+      e.preventDefault();
+      $("drop").classList.remove("drag");
+      if (e.dataTransfer.files[0]) await uploadFile(e.dataTransfer.files[0]);
+    });
+    $("file").addEventListener("change", async (e) => {
+      if (e.target.files[0]) await uploadFile(e.target.files[0]);
+    });
+
+    $("pickImage").addEventListener("click", async () => {
+      try { const picked = await pickFile("image"); if (picked) await inspectPath(picked); }
+      catch (err) { log("选择原图失败：" + err.message); }
+    });
+    $("inspect").addEventListener("click", async () => {
+      try { await inspectPath($("path").value.trim()); }
+      catch (err) { log("读取失败：" + err.message); }
+    });
+    $("pickSplitOutput").addEventListener("click", async () => {
+      try { const picked = await pickFolder("选择切分输出文件夹"); if (picked) $("splitOutput").value = picked; }
+      catch (err) { log("选择输出失败：" + err.message); }
+    });
+    $("plan").addEventListener("click", async () => {
+      try { setBusy(true); await plan(); }
+      catch (err) { log("预览失败：" + err.message); }
+      finally { setBusy(false); }
+    });
+    $("split").addEventListener("click", async () => {
+      try { setBusy(true); await splitCurrent(); }
+      catch (err) { log("切分失败：" + err.message); }
+      finally { setBusy(false); }
+    });
+
+    $("pickPatchManifest").addEventListener("click", async () => {
+      try { const picked = await pickFile("manifest"); if (picked) $("patchManifest").value = picked; }
+      catch (err) { log("选择回贴 manifest 失败：" + err.message); }
+    });
+    $("pickPatchTiles").addEventListener("click", async () => {
+      try { const picked = await pickFolder("选择当前 tiles 文件夹"); if (picked) $("patchTiles").value = picked; }
+      catch (err) { log("选择当前 tiles 文件夹失败：" + err.message); }
+    });
+    $("loadPatchSelector").addEventListener("click", async () => {
+      try { setBusy(true); await loadPatchSelector(); }
+      catch (err) { log("加载候选图失败：" + err.message); }
+      finally { setBusy(false); }
+    });
+    $("pickPatchImage").addEventListener("click", async () => {
+      try { const picked = await pickFile("image"); if (picked) $("patchImage").value = picked; }
+      catch (err) { log("选择修复小图失败：" + err.message); }
+    });
+    $("pickPatchOutput").addEventListener("click", async () => {
+      try { const picked = await pickFolder("选择回贴输出文件夹"); if (picked) $("patchOutput").value = picked; }
+      catch (err) { log("选择回贴输出失败：" + err.message); }
+    });
+    $("patchPreview").addEventListener("click", async () => {
+      try { setBusy(true); await runPatchAlign(false); }
+      catch (err) { log("生成定位预览失败：" + err.message); }
+      finally { setBusy(false); }
+    });
+    $("patchApply").addEventListener("click", async () => {
+      try { setBusy(true); await runPatchAlign(true); }
+      catch (err) { log("确认回贴失败：" + err.message); }
+      finally { setBusy(false); }
+    });
+
+    $("pickManifest").addEventListener("click", async () => {
+      try { const picked = await pickFile("manifest"); if (picked) $("manifest").value = picked; }
+      catch (err) { log("选择 manifest 失败：" + err.message); }
+    });
+    $("pickRestored").addEventListener("click", async () => {
+      try { const picked = await pickFolder("选择已修复图片文件夹"); if (picked) $("restored").value = picked; }
+      catch (err) { log("选择修复文件夹失败：" + err.message); }
+    });
+    $("pickStitchOutput").addEventListener("click", async () => {
+      try { const picked = await pickFolder("选择拼合输出文件夹"); if (picked) $("stitchOutput").value = picked; }
+      catch (err) { log("选择拼合输出失败：" + err.message); }
+    });
+    $("pickReference").addEventListener("click", async () => {
+      try { const picked = await pickFile("image"); if (picked) $("referencePath").value = picked; }
+      catch (err) { log("选择参考图失败：" + err.message); }
+    });
+    $("stitch").addEventListener("click", async () => {
+      try {
+        setBusy(true);
+        const result = await post("/api/stitch", {
+          manifest_path: $("manifest").value.trim(),
+          restored_dir: $("restored").value.trim(),
+          out_name: $("outName").value.trim(),
+          output_dir: $("stitchOutput").value.trim(),
+          mode: $("stitchMode").value,
+          selected_tiles: $("selectedTiles").value.trim(),
+          blend_mode: $("blendMode").value,
+          color_mode: $("colorMode").value,
+          seam_strength: $("seamStrength").value,
+          low_freq_strength: Number($("lowFreqStrength").value),
+          color_tiles: $("colorTiles").value.trim(),
+          trim_padding: $("trimPadding").value === "true",
+          feather_px: Number($("featherPx").value),
+          reference_path: $("referencePath").value.trim()
+        });
+        setResult({
+          summary: `
+            <strong>${result.color_applied ? `已调色 ${result.color_matched_tiles} 块` : "未调色"}</strong>${result.seam_balance ? `（接缝平衡 ${result.seam_strength}）` : ""}${result.low_freq_strength > 0 ? `<br>低频校正：${result.low_freq_strength}` : ""}<br>
+            输出：${result.out_path}<br>
+            尺寸：${result.canvas_width} x ${result.canvas_height}${result.trim_padding ? "（已裁补色边）" : ""}<br>
+            拼合：${result.pasted} 块，缺 ${result.missing.length} 块，${result.blend_mode} ${result.feather_px}px
+          `
+        });
+        updateStitchStats(result);
+        showOutputPreview(result);
+        showColorCompare(result);
+        log(`拼合完成：已拼 ${result.pasted} 块，缺 ${result.missing.length} 块，${result.color_applied ? `已调色 ${result.color_matched_tiles} 块` : "未调色"}`);
+      } catch (err) {
+        log("拼合失败：" + err.message);
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    $("pickQuickImage").addEventListener("click", async () => {
+      try { const picked = await pickFile("image"); if (picked) await inspectPath(picked, "quick"); }
+      catch (err) { log("选择图片失败：" + err.message); }
+    });
+    $("inspectQuick").addEventListener("click", async () => {
+      try { await inspectPath($("quickPath").value.trim(), "quick"); }
+      catch (err) { log("读取失败：" + err.message); }
+    });
+    $("pickQuickOutput").addEventListener("click", async () => {
+      try { const picked = await pickFolder("选择快速切分输出文件夹"); if (picked) $("quickOutput").value = picked; }
+      catch (err) { log("选择输出失败：" + err.message); }
+    });
+    $("quickPlan").addEventListener("click", async () => {
+      try { setBusy(true); await plan("quick"); }
+      catch (err) { log("预览失败：" + err.message); }
+      finally { setBusy(false); }
+    });
+    $("quickSplit").addEventListener("click", async () => {
+      try { setBusy(true); await splitCurrent("quick"); }
+      catch (err) { log("快速切分失败：" + err.message); }
+      finally { setBusy(false); }
+    });
+    ["quickRows", "quickCols"].forEach(id => {
+      $(id).addEventListener("change", async () => {
+        if (!quickPath && !$("quickPath").value.trim()) return;
+        try { await plan("quick"); }
+        catch (err) { log("分割预览失败：" + err.message); }
+      });
+    });
+
+    $("clear").addEventListener("click", () => {
+      currentPath = "";
+      quickPath = "";
+      ["path","splitOutput","manifest","restored","stitchOutput","selectedTiles","colorTiles","referencePath","quickPath","quickOutput"].forEach(id => $(id).value = "");
+      $("preview").removeAttribute("src");
+      $("preview").removeAttribute("style");
+      $("previewWrap").style.aspectRatio = "";
+      $("comparePanel").classList.remove("active");
+      $("compareGrid").innerHTML = "";
+      $("compareCaption").textContent = "";
+      $("grid").innerHTML = "";
+      $("log").textContent = "";
+      setResult(null);
+      ["size","gridStat","workSize","paddingSize","tileSize","strideSize","overlapStat","scaleStat"].forEach(id => $(id).textContent = "-");
+    });
+
+    loadHistory();
+  </script>
+</body>
+</html>

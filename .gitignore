@@ -1,0 +1,6 @@
+inputs/
+outputs/
+custom_output_test/
+custom_stitch_test/
+__pycache__/
+*.log
