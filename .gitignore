@@ -4,3 +4,9 @@ custom_output_test/
 custom_stitch_test/
 __pycache__/
 *.log
+
+# PyInstaller / release artifacts can be regenerated from xiangliu-grid.spec.
+build/
+dist/
+release/*.exe
+XiangliuGrid-*-setup.exe

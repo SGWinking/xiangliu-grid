@@ -356,19 +356,23 @@ def build_plan(
     overlap: int,
     allow_upscale: bool = False,
     strict_count: bool = False,
+    grid_shift_x: int = 0,
+    grid_shift_y: int = 0,
 ) -> dict:
     info = image_info(path)
     tile_w, tile_h = fixed_tile_size(long_edge)
     stride_w = max(1, tile_w - overlap)
     stride_h = max(1, tile_h - overlap)
-    cols = max(1, math.ceil(max(0, info["width"] - tile_w) / stride_w) + 1)
-    rows = max(1, math.ceil(max(0, info["height"] - tile_h) / stride_h) + 1)
+    grid_shift_x = int(grid_shift_x)
+    grid_shift_y = int(grid_shift_y)
+    offset_x = (-grid_shift_x) % stride_w if stride_w else 0
+    offset_y = (-grid_shift_y) % stride_h if stride_h else 0
+    cols = max(1, math.ceil(max(0, offset_x + info["width"] - tile_w) / stride_w) + 1)
+    rows = max(1, math.ceil(max(0, offset_y + info["height"] - tile_h) / stride_h) + 1)
     cover_w, cover_h = fixed_coverage(cols, rows, tile_w, tile_h, overlap)
     scale = 1.0
     scaled_image_w = info["width"]
     scaled_image_h = info["height"]
-    offset_x = 0
-    offset_y = 0
     original_overlap = overlap
     tiles = []
     for row in range(rows):
@@ -450,6 +454,8 @@ def build_plan(
         "scaled_image_height": scaled_image_h,
         "canvas_padding_x": offset_x,
         "canvas_padding_y": offset_y,
+        "grid_shift_x": grid_shift_x,
+        "grid_shift_y": grid_shift_y,
         "canvas_padding_right": cover_w - offset_x - scaled_image_w,
         "canvas_padding_bottom": cover_h - offset_y - scaled_image_h,
         "core_tile_width": tile_w,
@@ -584,8 +590,10 @@ def split_image(
     output_base: Path | None = None,
     allow_upscale: bool = False,
     strict_count: bool = False,
+    grid_shift_x: int = 0,
+    grid_shift_y: int = 0,
 ) -> dict:
-    plan = build_plan(path, target, long_edge, overlap, allow_upscale, strict_count)
+    plan = build_plan(path, target, long_edge, overlap, allow_upscale, strict_count, grid_shift_x, grid_shift_y)
     base_dir = output_base if output_base else OUTPUT_DIR
     out_dir = base_dir / safe_name(job_name or f"{path.stem}_{plan['pieces']}tiles")
     tiles_dir = out_dir / "tiles"
@@ -736,6 +744,83 @@ def split_image_grid(
         "locator_map": str(locator_map),
         "locator_preview_url": f"/api/preview?path={quote(str(locator_map))}",
         "plan": plan,
+    }
+
+
+def resize_export(
+    path: Path,
+    edge_mode: str,
+    target_px: int,
+    scale_mode: str,
+    scale_factor: float,
+    output_format: str,
+    quality: int,
+    allow_upscale: bool,
+    job_name: str,
+    output_base: Path | None = None,
+    out_name: str = "",
+) -> dict:
+    target_px = max(1, int(target_px))
+    scale_mode = scale_mode if scale_mode in {"edge", "factor"} else "edge"
+    scale_factor = max(0.01, min(16.0, float(scale_factor or 1.0)))
+    quality = max(1, min(100, int(quality)))
+    edge_mode = edge_mode if edge_mode in {"long", "short"} else "long"
+    output_format = (output_format or "png").lower()
+    if output_format not in {"png", "jpg", "jpeg", "webp", "tif", "tiff"}:
+        output_format = "png"
+
+    with Image.open(path) as img:
+        source_w, source_h = img.size
+        source_long = max(source_w, source_h)
+        source_short = min(source_w, source_h)
+        if scale_mode == "factor":
+            scale = scale_factor
+        else:
+            basis = source_long if edge_mode == "long" else source_short
+            scale = target_px / basis
+        out_w = max(1, round(source_w * scale))
+        out_h = max(1, round(source_h * scale))
+        resized = img.copy()
+        if (out_w, out_h) != img.size:
+            resized = resized.resize((out_w, out_h), Image.Resampling.LANCZOS)
+
+        ext = "jpg" if output_format == "jpeg" else output_format
+        save_format = {"jpg": "JPEG", "tif": "TIFF"}.get(ext, ext.upper())
+        base_dir = output_base if output_base else OUTPUT_DIR
+        name_suffix = f"{scale_factor:g}x" if scale_mode == "factor" else f"{edge_mode}_{target_px}px"
+        out_dir = base_dir / safe_name(job_name or f"{path.stem}_{name_suffix}")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        default_name = f"{path.stem}_{name_suffix}.{ext}"
+        out_path = out_dir / safe_name(out_name or default_name)
+        if out_path.suffix.lower() != f".{ext}":
+            out_path = out_path.with_suffix(f".{ext}")
+
+        save_kwargs = {}
+        if save_format in {"JPEG", "WEBP"}:
+            save_kwargs["quality"] = quality
+        if save_format == "JPEG":
+            save_kwargs["optimize"] = True
+            save_img = resized.convert("RGB")
+        else:
+            save_img = resized
+        save_img.save(out_path, save_format, **save_kwargs)
+
+    return {
+        "out_dir": str(out_dir),
+        "out_path": str(out_path),
+        "preview_url": f"/api/preview?path={quote(str(out_path))}",
+        "source_width": source_w,
+        "source_height": source_h,
+        "width": out_w,
+        "height": out_h,
+        "edge_mode": edge_mode,
+        "target_px": target_px,
+        "scale_mode": scale_mode,
+        "scale_factor": scale_factor,
+        "scale": scale,
+        "format": ext,
+        "quality": quality,
+        "allow_upscale": True,
     }
 
 
@@ -1641,6 +1726,8 @@ class Handler(BaseHTTPRequestHandler):
                     int(payload.get("overlap", 20)),
                     bool(payload.get("allow_upscale", False)),
                     bool(payload.get("strict_count", False)),
+                    int(payload.get("grid_shift_x", 0)),
+                    int(payload.get("grid_shift_y", 0)),
                 )
                 plan.pop("tiles")
                 json_response(self, plan)
@@ -1668,6 +1755,8 @@ class Handler(BaseHTTPRequestHandler):
                     output_base,
                     bool(payload.get("allow_upscale", False)),
                     bool(payload.get("strict_count", False)),
+                    int(payload.get("grid_shift_x", 0)),
+                    int(payload.get("grid_shift_y", 0)),
                 )
                 result["plan"].pop("tiles", None)
                 remember_manifest(Path(result["manifest_json"]), Path(result["tiles_dir"]), payload.get("job_name", ""))
@@ -1686,6 +1775,25 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 result["plan"].pop("tiles", None)
                 remember_manifest(Path(result["manifest_json"]), Path(result["tiles_dir"]), payload.get("job_name", ""))
+                json_response(self, result)
+                return
+            if parsed.path == "/api/resize-export":
+                path = resolve_image_path(payload.get("path", ""))
+                output_base_raw = payload.get("output_base", "")
+                output_base = resolve_image_path(output_base_raw) if output_base_raw else None
+                result = resize_export(
+                    path,
+                    payload.get("edge_mode", "long"),
+                    int(payload.get("target_px", 2048)),
+                    payload.get("scale_mode", "edge"),
+                    float(payload.get("scale_factor", 1.0)),
+                    payload.get("format", "png"),
+                    int(payload.get("quality", 92)),
+                    bool(payload.get("allow_upscale", False)),
+                    payload.get("job_name", ""),
+                    output_base,
+                    payload.get("out_name", ""),
+                )
                 json_response(self, result)
                 return
             if parsed.path in {"/api/patch-align-preview", "/api/patch-align-apply"}:

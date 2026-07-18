@@ -464,6 +464,7 @@
       <button class="tab active" data-page="splitPage">1 图块裁切</button>
       <button class="tab" data-page="stitchPage">2 整图拼合</button>
       <button class="tab" data-page="quickPage">3 行列裁切</button>
+      <button class="tab" data-page="resizePage">4 分辨率导出</button>
     </nav>
     <button id="themeToggle" class="themeToggle" type="button">深色</button>
     </div>
@@ -493,6 +494,21 @@
           <div class="row">
             <label>块尺寸<input id="longEdge" type="number" min="256" value="2048"></label>
             <label>重叠<input id="overlap" type="number" min="0" max="512" value="20"></label>
+          </div>
+          <label>分割线平移</label>
+          <div class="row">
+            <label>水平 px<input id="gridShiftX" type="number" step="1" value="0"></label>
+            <label>垂直 px<input id="gridShiftY" type="number" step="1" value="0"></label>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button id="shiftLeft" class="secondary">左移</button>
+            <button id="shiftRight" class="secondary">右移</button>
+            <button id="shiftUp" class="secondary">上移</button>
+            <button id="shiftDown" class="secondary">下移</button>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <label>步进 px<input id="gridShiftStep" type="number" min="1" value="50"></label>
+            <button id="shiftReset" class="secondary">重置平移</button>
           </div>
           <label>任务名</label>
           <input id="jobName" placeholder="xiangliu_grid_tiles">
@@ -656,6 +672,64 @@
           </div>
         </div>
       </div>
+
+      <div id="resizePage" class="page resizePage">
+        <div class="guide">
+          <strong>按目标分辨率等比导出整图。</strong>
+          可按长边或短边指定像素，保持原始比例输出一张新图片，适合给平台上传、预览图或二次处理准备统一尺寸。
+        </div>
+        <div class="block">
+          <h2>待导出图片</h2>
+          <div id="resizeDrop" class="drop">拖入图片<br>或点击选择本地图片</div>
+          <input id="resizeFile" type="file" accept="image/*,.tif,.tiff,.png,.jpg,.jpeg,.webp,.bmp" hidden>
+          <label>图片路径</label>
+          <input id="resizePath" placeholder="C:\path\to\image.png">
+          <div class="row" style="margin-top:10px">
+            <button id="pickResizeImage">选择</button>
+            <button id="inspectResize" class="secondary">读取</button>
+          </div>
+        </div>
+        <div class="block action">
+          <h2>分辨率与输出</h2>
+          <label>导出方式
+            <select id="resizeScaleMode">
+              <option value="edge" selected>按长边 / 短边像素</option>
+              <option value="factor">按分辨率倍数</option>
+            </select>
+          </label>
+          <div class="row">
+            <label>缩放依据
+              <select id="resizeEdgeMode">
+                <option value="long" selected>长边</option>
+                <option value="short">短边</option>
+              </select>
+            </label>
+            <label>目标像素<input id="resizeTargetPx" type="number" min="1" value="2048"></label>
+          </div>
+          <label>分辨率倍数<input id="resizeScaleFactor" type="number" min="0.01" max="16" step="0.01" value="1"></label>
+          <div class="row">
+            <label>格式
+              <select id="resizeFormat">
+                <option value="png" selected>PNG</option>
+                <option value="jpg">JPG</option>
+                <option value="webp">WebP</option>
+                <option value="tif">TIFF</option>
+              </select>
+            </label>
+            <label>质量<input id="resizeQuality" type="number" min="1" max="100" value="92"></label>
+          </div>
+          <label>任务名</label>
+          <input id="resizeJobName" placeholder="resolution_export">
+          <label>输出文件名</label>
+          <input id="resizeOutName" placeholder="留空则自动命名">
+          <label>输出文件夹</label>
+          <input id="resizeOutput" placeholder="不填则输出到工具 outputs 目录">
+          <div class="row" style="margin-top:10px">
+            <button id="pickResizeOutput" class="secondary">选择输出</button>
+            <button id="resizeExport" class="red">导出图片</button>
+          </div>
+        </div>
+      </div>
     </aside>
 
     <section>
@@ -694,8 +768,11 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const API_BASE = location.protocol === "file:" ? "http://127.0.0.1:8765" : "";
+    const apiUrl = (url) => url && url.startsWith("/") ? API_BASE + url : url;
     let currentPath = "";
     let quickPath = "";
+    let resizePath = "";
     let patchSelector = null;
     let patchDragStart = null;
 
@@ -733,14 +810,15 @@
     function setStatLabels(mode) {
       const splitLabels = ["图像尺寸", "网格", "工作画布", "右/下留白", "模型块", "步长", "重叠", "缩放"];
       const stitchLabels = ["输出尺寸", "已拼图块", "拼合模式", "缺失图块", "调色算法", "调色状态", "羽化像素", "重叠处理"];
-      const labels = mode === "stitch" ? stitchLabels : splitLabels;
+      const resizeLabels = ["原图尺寸", "输出尺寸", "缩放依据", "目标", "格式", "质量", "算法", "缩放比例"];
+      const labels = mode === "stitch" ? stitchLabels : (mode === "resize" ? resizeLabels : splitLabels);
       ["labelSize","labelGrid","labelWork","labelPadding","labelTile","labelStride","labelOverlap","labelScale"].forEach((id, index) => {
         $(id).textContent = labels[index];
       });
     }
 
     async function post(url, payload) {
-      const res = await fetch(url, {
+      const res = await fetch(apiUrl(url), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
@@ -751,7 +829,7 @@
     }
 
     async function get(url) {
-      const res = await fetch(url);
+      const res = await fetch(apiUrl(url));
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || res.statusText);
       return data;
@@ -795,6 +873,18 @@
       $("scaleStat").textContent = result.blend_mode || "-";
     }
 
+    function updateResizeStats(data) {
+      setStatLabels("resize");
+      $("size").textContent = `${data.source_width || data.width} x ${data.source_height || data.height}`;
+      $("gridStat").textContent = data.out_path ? `${data.width} x ${data.height}` : "-";
+      $("workSize").textContent = data.scale_mode === "factor" ? "倍数" : (data.edge_mode === "short" ? "短边" : "长边");
+      $("paddingSize").textContent = data.scale_mode === "factor" ? `${data.scale_factor || 1}x` : (data.target_px ? `${data.target_px}px` : "-");
+      $("tileSize").textContent = data.format ? data.format.toUpperCase() : "-";
+      $("strideSize").textContent = data.quality ? `${data.quality}` : "-";
+      $("overlapStat").textContent = "Lanczos";
+      $("scaleStat").textContent = data.scale ? `${(data.scale * 100).toFixed(2)}%` : "-";
+    }
+
     function showOutputPreview(result) {
       const wrap = $("previewWrap");
       const preview = $("preview");
@@ -803,7 +893,19 @@
       $("selectionBox").style.display = "none";
       wrap.style.aspectRatio = `${result.canvas_width} / ${result.canvas_height}`;
       preview.removeAttribute("style");
-      if (result.preview_url) preview.src = result.preview_url + "&t=" + Date.now();
+      if (result.preview_url) preview.src = apiUrl(result.preview_url) + "&t=" + Date.now();
+    }
+
+    function showPlainImagePreview(data) {
+      const wrap = $("previewWrap");
+      const preview = $("preview");
+      patchSelector = null;
+      $("grid").innerHTML = "";
+      $("selectionBox").style.display = "none";
+      wrap.style.aspectRatio = `${data.width} / ${data.height}`;
+      preview.removeAttribute("style");
+      if (data.preview_url) preview.src = apiUrl(data.preview_url) + "&t=" + Date.now();
+      $("comparePanel").classList.remove("active");
     }
 
     function showPatchPreview(result) {
@@ -824,7 +926,7 @@
       $("overlapStat").textContent = result.output_tiles_dir ? "applied" : "preview";
       $("scaleStat").textContent = result.output_tiles_dir || result.run_dir || "-";
       preview.removeAttribute("style");
-      if (result.preview_url) preview.src = result.preview_url + "&t=" + Date.now();
+      if (result.preview_url) preview.src = apiUrl(result.preview_url) + "&t=" + Date.now();
       $("comparePanel").classList.remove("active");
     }
 
@@ -836,7 +938,7 @@
       $("selectionBox").style.display = "none";
       wrap.style.aspectRatio = `${data.width} / ${data.height}`;
       preview.removeAttribute("style");
-      preview.src = data.preview_url + "&t=" + Date.now();
+      preview.src = apiUrl(data.preview_url) + "&t=" + Date.now();
       $("size").textContent = `${data.width} x ${data.height}`;
       $("gridStat").textContent = `可选 ${data.tiles.length} 块`;
       $("workSize").textContent = `已加载 ${data.loaded_tiles.length} 块`;
@@ -914,10 +1016,10 @@
         card.className = "compareCard";
         card.innerHTML = `
           <strong>${item.tile_id}</strong>
-          <img src="${item.preview_url}&t=${Date.now()}" alt="${item.tile_id}">
+          <img src="${apiUrl(item.preview_url)}&t=${Date.now()}" alt="${item.tile_id}">
           <small>before ${JSON.stringify(item.before_rgb_mean)}<br>after ${JSON.stringify(item.after_rgb_mean)}<br>delta ${JSON.stringify(item.delta_rgb_mean)}</small>
         `;
-        card.ondblclick = () => window.open(item.preview_url, "_blank");
+        card.ondblclick = () => window.open(apiUrl(item.preview_url), "_blank");
         grid.appendChild(card);
       });
       const ids = (result.color_tile_ids || []).slice(0, 12).join(", ");
@@ -965,17 +1067,67 @@
           quickPath = info.path;
           $("quickPath").value = info.path;
           $("quickJobName").placeholder = `${info.filename.replace(/\.[^.]+$/, "")}_cut`;
+        } else if (target === "resize") {
+          resizePath = info.path;
+          $("resizePath").value = info.path;
+          $("resizeJobName").placeholder = `${info.filename.replace(/\.[^.]+$/, "")}_resize`;
+          showPlainImagePreview(info);
+          updateResizeStats({
+            source_width: info.width,
+            source_height: info.height,
+            width: info.width,
+            height: info.height,
+            scale_mode: $("resizeScaleMode").value,
+            edge_mode: $("resizeEdgeMode").value,
+            target_px: Number($("resizeTargetPx").value),
+            scale_factor: Number($("resizeScaleFactor").value),
+            format: $("resizeFormat").value,
+            quality: Number($("resizeQuality").value),
+            scale: 1
+          });
+          log("分辨率导出图片已读取", info);
+          return info;
         } else {
           currentPath = info.path;
           $("path").value = info.path;
           $("jobName").placeholder = `${info.filename.replace(/\.[^.]+$/, "")}_tiles`;
         }
-        $("preview").src = info.preview_url + "&t=" + Date.now();
+        $("preview").src = apiUrl(info.preview_url) + "&t=" + Date.now();
         log("图像读取成功", info);
         await plan(target);
       } finally {
         setBusy(false);
       }
+    }
+
+    async function exportResizeImage() {
+      const path = resizePath || $("resizePath").value.trim();
+      if (!path) throw new Error("请先选择或输入图片路径");
+      const result = await post("/api/resize-export", {
+        path,
+        scale_mode: $("resizeScaleMode").value,
+        scale_factor: Number($("resizeScaleFactor").value),
+        edge_mode: $("resizeEdgeMode").value,
+        target_px: Number($("resizeTargetPx").value),
+        format: $("resizeFormat").value,
+        quality: Number($("resizeQuality").value),
+        job_name: $("resizeJobName").value.trim(),
+        out_name: $("resizeOutName").value.trim(),
+        output_base: $("resizeOutput").value.trim()
+      });
+      updateResizeStats(result);
+      showPlainImagePreview(result);
+      setResult({
+        summary: `
+          <strong>导出完成</strong><br>
+          输出：${result.out_path}<br>
+          尺寸：${result.width} x ${result.height}<br>
+          方式：${result.scale_mode === "factor" ? `${result.scale_factor}x 倍率` : `${result.edge_mode === "short" ? "短边" : "长边"} ${result.target_px}px`}<br>
+          缩放：${(result.scale * 100).toFixed(2)}%，格式：${result.format.toUpperCase()}
+        `
+      });
+      log("分辨率导出完成", result);
+      return result;
     }
 
     async function plan(target = "main") {
@@ -993,6 +1145,8 @@
             target_pieces: 0,
             long_edge: Number($("longEdge").value),
             overlap: Number($("overlap").value),
+            grid_shift_x: Number($("gridShiftX").value),
+            grid_shift_y: Number($("gridShiftY").value),
             allow_upscale: false,
             strict_count: false
           });
@@ -1024,6 +1178,8 @@
             target_pieces: 0,
             long_edge: Number($("longEdge").value),
             overlap: Number($("overlap").value),
+            grid_shift_x: Number($("gridShiftX").value),
+            grid_shift_y: Number($("gridShiftY").value),
             allow_upscale: false,
             strict_count: false,
             job_name: (isQuick ? $("quickJobName").value : $("jobName").value).trim(),
@@ -1040,24 +1196,24 @@
         locator_map: result.locator_map
       });
       if (result.locator_preview_url) {
-        $("preview").src = result.locator_preview_url + "&t=" + Date.now();
+        $("preview").src = apiUrl(result.locator_preview_url) + "&t=" + Date.now();
       }
       log("切分完成", result);
       await loadHistory();
     }
 
-    async function uploadFile(file) {
+    async function uploadFile(file, target = "main") {
       setBusy(true);
       try {
         log(`开始上传：${file.name}`);
-        const res = await fetch("/api/upload", {
+        const res = await fetch(apiUrl("/api/upload"), {
           method: "POST",
           headers: {"X-Filename": encodeURIComponent(file.name)},
           body: file
         });
         const data = await res.json();
         if (data.error) throw new Error(data.error);
-        await inspectPath(data.path);
+        await inspectPath(data.path, target);
       } catch (err) {
         log("上传/读取失败：" + err.message);
       } finally {
@@ -1147,6 +1303,27 @@
       if (e.target.files[0]) await uploadFile(e.target.files[0]);
     });
 
+    $("resizeDrop").addEventListener("click", () => $("resizeFile").click());
+    $("resizeDrop").addEventListener("dragover", (e) => { e.preventDefault(); $("resizeDrop").classList.add("drag"); });
+    $("resizeDrop").addEventListener("dragleave", () => $("resizeDrop").classList.remove("drag"));
+    $("resizeDrop").addEventListener("drop", async (e) => {
+      e.preventDefault();
+      $("resizeDrop").classList.remove("drag");
+      if (e.dataTransfer.files[0]) await uploadFile(e.dataTransfer.files[0], "resize");
+    });
+    $("resizeFile").addEventListener("change", async (e) => {
+      if (e.target.files[0]) await uploadFile(e.target.files[0], "resize");
+    });
+
+    function syncResizeScaleControls() {
+      const factorMode = $("resizeScaleMode").value === "factor";
+      $("resizeEdgeMode").disabled = factorMode;
+      $("resizeTargetPx").disabled = factorMode;
+      $("resizeScaleFactor").disabled = !factorMode;
+    }
+    $("resizeScaleMode").addEventListener("change", syncResizeScaleControls);
+    syncResizeScaleControls();
+
     $("pickImage").addEventListener("click", async () => {
       try { const picked = await pickFile("image"); if (picked) await inspectPath(picked); }
       catch (err) { log("选择原图失败：" + err.message); }
@@ -1168,6 +1345,36 @@
       try { setBusy(true); await splitCurrent(); }
       catch (err) { log("切分失败：" + err.message); }
       finally { setBusy(false); }
+    });
+
+    let splitPreviewTimer = null;
+    function scheduleSplitPreview() {
+      const path = currentPath || $("path").value.trim();
+      if (!path) return;
+      clearTimeout(splitPreviewTimer);
+      splitPreviewTimer = setTimeout(async () => {
+        try { await plan(); }
+        catch (err) { log("同步预览失败：" + err.message); }
+      }, 260);
+    }
+    function shiftGrid(dx, dy) {
+      const step = Math.max(1, Number($("gridShiftStep").value) || 1);
+      $("gridShiftX").value = Math.round((Number($("gridShiftX").value) || 0) + dx * step);
+      $("gridShiftY").value = Math.round((Number($("gridShiftY").value) || 0) + dy * step);
+      scheduleSplitPreview();
+    }
+    $("shiftLeft").addEventListener("click", () => shiftGrid(-1, 0));
+    $("shiftRight").addEventListener("click", () => shiftGrid(1, 0));
+    $("shiftUp").addEventListener("click", () => shiftGrid(0, -1));
+    $("shiftDown").addEventListener("click", () => shiftGrid(0, 1));
+    $("shiftReset").addEventListener("click", () => {
+      $("gridShiftX").value = 0;
+      $("gridShiftY").value = 0;
+      scheduleSplitPreview();
+    });
+    ["longEdge","overlap","gridShiftX","gridShiftY"].forEach(id => {
+      $(id).addEventListener("input", scheduleSplitPreview);
+      $(id).addEventListener("change", scheduleSplitPreview);
     });
 
     $("pickPatchManifest").addEventListener("click", async () => {
@@ -1286,10 +1493,32 @@
       });
     });
 
+    $("pickResizeImage").addEventListener("click", async () => {
+      try { const picked = await pickFile("image"); if (picked) await inspectPath(picked, "resize"); }
+      catch (err) { log("选择导出图片失败：" + err.message); }
+    });
+    $("inspectResize").addEventListener("click", async () => {
+      try { await inspectPath($("resizePath").value.trim(), "resize"); }
+      catch (err) { log("读取导出图片失败：" + err.message); }
+    });
+    $("pickResizeOutput").addEventListener("click", async () => {
+      try { const picked = await pickFolder("选择分辨率导出文件夹"); if (picked) $("resizeOutput").value = picked; }
+      catch (err) { log("选择导出文件夹失败：" + err.message); }
+    });
+    $("resizeExport").addEventListener("click", async () => {
+      try { setBusy(true); await exportResizeImage(); }
+      catch (err) { log("分辨率导出失败：" + err.message); }
+      finally { setBusy(false); }
+    });
+
     $("clear").addEventListener("click", () => {
       currentPath = "";
       quickPath = "";
-      ["path","splitOutput","manifest","restored","stitchOutput","selectedTiles","colorTiles","referencePath","quickPath","quickOutput"].forEach(id => $(id).value = "");
+      resizePath = "";
+      ["path","splitOutput","manifest","restored","stitchOutput","selectedTiles","colorTiles","referencePath","quickPath","quickOutput","resizePath","resizeOutput","resizeOutName"].forEach(id => $(id).value = "");
+      $("gridShiftX").value = 0;
+      $("gridShiftY").value = 0;
+      $("gridShiftStep").value = 50;
       $("preview").removeAttribute("src");
       $("preview").removeAttribute("style");
       $("previewWrap").style.aspectRatio = "";

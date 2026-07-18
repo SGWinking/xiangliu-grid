@@ -1,0 +1,10 @@
+;!@Install@!UTF-8!
+Title="Xiangliu Grid v0.4.1 / 相柳网格"
+BeginPrompt="是否要安装 Xiangliu Grid v0.4.1？将解压到当前目录。"
+ExtractDialogText="正在解压文件，请稍候..."
+ExtractPathText="选择解压目录（建议保持默认）："
+ExtractTitle="Xiangliu Grid v0.4.1 安装"
+GUIFlags="1+2+8"
+InstallPath="%%S\xiangliu-grid"
+RunProgram="启动相柳网格.bat"
+;!@InstallEnd@!
