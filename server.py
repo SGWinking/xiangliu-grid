@@ -16,6 +16,17 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageStat
 
+from color_engine.palette import (
+    apply_palette_profile,
+    build_palette_profile,
+    load_palette_profile,
+    render_palette_profile,
+    save_palette_profile,
+)
+from color_engine.report import write_seam_report
+from color_engine.seams import analyze_placement_seams
+from experiments.structure_recolor.engine import decompose_tile, joint_grayscale_normalize, recolor_tile
+
 try:
     import cv2
 except Exception:
@@ -33,7 +44,7 @@ PREVIEW_DIR = OUTPUT_DIR / "_previews"
 HISTORY_FILE = OUTPUT_DIR / "manifest_history.json"
 DEFAULT_PORT = 8765
 APP_NAME = "Xiangliu Grid"
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.5.0"
 
 for directory in (INPUT_DIR, OUTPUT_DIR, PREVIEW_DIR):
     directory.mkdir(parents=True, exist_ok=True)
@@ -851,6 +862,13 @@ def parse_tile_ids(raw: str | list[str] | None) -> list[str]:
     return sorted(selected) if selected else []
 
 
+def parse_paths(raw: str | list[str] | None) -> list[Path]:
+    if not raw:
+        return []
+    values = raw if isinstance(raw, list) else re.split(r"[;；\n]+", raw)
+    return [resolve_image_path(value) for value in values if str(value).strip()]
+
+
 def load_manifest(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
@@ -970,6 +988,18 @@ def draw_patch_preview(region: Image.Image, patch: Image.Image, match: dict, out
 
 def make_tile_selector_map(manifest_path: Path, tiles_dir: Path, max_w: int = 2600, max_h: int = 1700) -> dict:
     plan = load_manifest(manifest_path)
+    row_by_y = {value: index + 1 for index, value in enumerate(sorted({tile["tile_rect"][1] for tile in plan["tiles"]}))}
+    col_by_x = {value: index + 1 for index, value in enumerate(sorted({tile["tile_rect"][0] for tile in plan["tiles"]}))}
+
+    def tile_grid_position(tile: dict) -> tuple[int, int]:
+        if tile.get("row") is not None and tile.get("col") is not None:
+            return int(tile["row"]), int(tile["col"])
+        match = re.fullmatch(r"R0*(\d+)_C0*(\d+)", str(tile.get("tile_id", "")), flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+        x, y = tile["tile_rect"][:2]
+        return row_by_y[y], col_by_x[x]
+
     scale = min(max_w / plan["working_width"], max_h / plan["working_height"], 1.0)
     canvas_w = max(1, round(plan["working_width"] * scale))
     canvas_h = max(1, round(plan["working_height"] * scale))
@@ -991,6 +1021,7 @@ def make_tile_selector_map(manifest_path: Path, tiles_dir: Path, max_w: int = 26
     font = ImageFont.load_default()
     tiles = []
     for tile in plan["tiles"]:
+        row, col = tile_grid_position(tile)
         x, y, w, h = tile["tile_rect"]
         box = (
             round(x * scale),
@@ -1005,6 +1036,8 @@ def make_tile_selector_map(manifest_path: Path, tiles_dir: Path, max_w: int = 26
         draw.text((box[0] + 8, box[1] + 7), label, fill=(255, 255, 255, 255), font=font)
         tiles.append({
             "tile_id": tile["tile_id"],
+            "row": row,
+            "col": col,
             "x": box[0],
             "y": box[1],
             "w": max(1, box[2] - box[0]),
@@ -1210,6 +1243,12 @@ def make_color_comparison(samples: list[dict], out_dir: Path) -> tuple[Path | No
     return out, items
 
 
+def comparison_thumbnail(image: Image.Image) -> Image.Image:
+    copy = image.convert("RGB").copy()
+    copy.thumbnail((520, 340), Image.Resampling.LANCZOS)
+    return copy
+
+
 def source_reference_for_tile(plan: dict, tile: dict, source_img: Image.Image | None) -> Image.Image | None:
     if source_img is None:
         return None
@@ -1227,6 +1266,7 @@ SEAM_BALANCE_PRESETS = {
     "light":    {"strip": 20, "inset": 80, "regularize": 0.50, "max_bias": 10.0, "feather": 80},
     "standard": {"strip": 20, "inset": 80, "regularize": 0.35, "max_bias": 18.0, "feather": 80},
     "strong":   {"strip": 20, "inset": 80, "regularize": 0.25, "max_bias": 24.0, "feather": 120},
+    "palette_residual": {"strip": 20, "inset": 80, "regularize": 0.85, "max_bias": 6.0, "feather": 20},
 }
 
 
@@ -1256,9 +1296,13 @@ def solve_seam_biases(
     strip_px: int,
     inset_px: int,
     regularize: float,
+    allowed_pairs: set[tuple[str, str]] | None = None,
+    fixed_zero_ids: set[str] | None = None,
 ) -> dict[str, np.ndarray]:
     by_pos = {(int(t[2].get("row", 1)), int(t[2].get("col", 1))): t for t in tile_images}
-    ids = [t[0] for t in tile_images]
+    all_ids = [t[0] for t in tile_images]
+    fixed_zero_ids = fixed_zero_ids or set()
+    ids = [tid for tid in all_ids if tid not in fixed_zero_ids]
     index = {tid: i for i, tid in enumerate(ids)}
     equations: list[tuple[str, str]] = []
     targets: list[np.ndarray] = []
@@ -1268,29 +1312,37 @@ def solve_seam_biases(
             if item is None:
                 continue
             right = by_pos.get((row, col + 1))
-            if right is not None:
+            if right is not None and (allowed_pairs is None or (item[0], right[0]) in allowed_pairs):
                 mean_a = strip_median_rgb(item[1], "right", strip_px, inset_px)
                 mean_b = strip_median_rgb(right[1], "left", strip_px, inset_px)
                 equations.append((item[0], right[0]))
                 targets.append(mean_b - mean_a)
             bottom = by_pos.get((row + 1, col))
-            if bottom is not None:
+            if bottom is not None and (allowed_pairs is None or (item[0], bottom[0]) in allowed_pairs):
                 mean_a = strip_median_rgb(item[1], "bottom", strip_px, inset_px)
                 mean_b = strip_median_rgb(bottom[1], "top", strip_px, inset_px)
                 equations.append((item[0], bottom[0]))
                 targets.append(mean_b - mean_a)
     n = len(ids)
+    if n == 0:
+        return {tid: np.zeros(3, dtype=np.float32) for tid in all_ids}
     mat = np.zeros((len(equations) + n + 1, n), dtype=np.float64)
     rhs = np.zeros((len(equations) + n + 1, 3), dtype=np.float64)
     for i, ((lid, rid), target) in enumerate(zip(equations, targets)):
-        mat[i, index[lid]] = 1.0
-        mat[i, index[rid]] = -1.0
+        if lid in index:
+            mat[i, index[lid]] = 1.0
+        if rid in index:
+            mat[i, index[rid]] = -1.0
         rhs[i] = target
     for off in range(n):
         mat[len(equations) + off, off] = regularize
-    mat[-1, :] = 1.0
+    if not fixed_zero_ids:
+        mat[-1, :] = 1.0
     solution, *_ = np.linalg.lstsq(mat, rhs, rcond=None)
-    return {tid: solution[index[tid]].astype(np.float32) for tid in ids}
+    return {
+        tid: solution[index[tid]].astype(np.float32) if tid in index else np.zeros(3, dtype=np.float32)
+        for tid in all_ids
+    }
 
 
 def apply_tile_bias(image: Image.Image, bias: np.ndarray, max_abs: float) -> Image.Image:
@@ -1404,6 +1456,70 @@ def feather_mask(size: tuple[int, int], tile: dict, plan: dict, feather_px: int)
     return Image.fromarray(mask.astype(np.uint8), "L")
 
 
+def apply_structure_recolor_placements(
+    placements: list[tuple[str, int, int, Image.Image, dict]],
+    palette_profile: dict,
+    palette_strength: float,
+    ink_lightness: float,
+) -> tuple[list[tuple[str, int, int, Image.Image, dict]], dict]:
+    if len(placements) > 9:
+        raise ValueError("统一灰阶与墨线实验第一版最多处理 9 块，请先用‘选择图块’限定范围")
+    if not placements:
+        return [], {"tiles": {}, "ink_lightness": ink_lightness}
+    min_x = min(item[1] for item in placements)
+    min_y = min(item[2] for item in placements)
+    max_x = max(item[1] + item[3].width for item in placements)
+    max_y = max(item[2] + item[3].height for item in placements)
+    layers = {tile_id: decompose_tile(image) for tile_id, _, _, image, _ in placements}
+    light_placements = [
+        (tile_id, x - min_x, y - min_y, layers[tile_id].structure_l)
+        for tile_id, x, y, _, _ in placements
+    ]
+    normalized, report = joint_grayscale_normalize(
+        light_placements,
+        (max_x - min_x, max_y - min_y),
+        overlap=20,
+        ink_lightness=ink_lightness,
+    )
+    lights = {item[0]: item[3] for item in normalized}
+    processed = [
+        (tile_id, x, y, recolor_tile(layers[tile_id], lights[tile_id], palette_profile, palette_strength), tile)
+        for tile_id, x, y, _, tile in placements
+    ]
+    return processed, report
+
+
+def validate_structure_recolor_selection(plan: dict, selected_tiles: set[str] | None) -> None:
+    if not selected_tiles:
+        raise ValueError("统一灰阶与墨线实验必须先用‘选择图块’指定相邻 4–9 块")
+    if len(selected_tiles) < 4:
+        raise ValueError("统一灰阶与墨线实验至少选择 4 块相邻图块")
+    if len(selected_tiles) > 9:
+        raise ValueError("统一灰阶与墨线实验第一版最多处理 9 块")
+    by_id = {tile["tile_id"].upper(): tile for tile in plan.get("tiles", [])}
+    missing = sorted(selected_tiles - set(by_id))
+    if missing:
+        raise ValueError(f"选择图块不存在：{', '.join(missing)}")
+    chosen = [by_id[tile_id] for tile_id in selected_tiles]
+    rows = sorted({int(tile["row"]) for tile in chosen})
+    cols = sorted({int(tile["col"]) for tile in chosen})
+    expected = {(row, col) for row in range(rows[0], rows[-1] + 1) for col in range(cols[0], cols[-1] + 1)}
+    actual = {(int(tile["row"]), int(tile["col"])) for tile in chosen}
+    if actual != expected:
+        raise ValueError("统一灰阶与墨线实验要求选择连续的矩形相邻图块")
+    total_pixels = 0
+    for tile in chosen:
+        if plan.get("layout_mode") == "fixed_3x4":
+            rect = tile["tile_rect"]
+            total_pixels += int(rect[2]) * int(rect[3])
+        else:
+            core = tile["core"]
+            scale = float(plan["scale"])
+            total_pixels += round(core[2] * scale) * round(core[3] * scale)
+    if total_pixels > 20_000_000:
+        raise ValueError("实验选区超过 2000 万像素；2048 图请先选择相邻 4 块")
+
+
 def stitch_tiles(
     manifest_path: Path,
     restored_dir: Path,
@@ -1420,6 +1536,15 @@ def stitch_tiles(
     seam_balance: bool = False,
     seam_strength: str = "standard",
     low_freq_strength: float = 0.0,
+    palette_profile_path: Path | None = None,
+    palette_reference_paths: list[Path] | None = None,
+    palette_strength: float = 0.85,
+    neutral_protection: float = 0.9,
+    skin_protection: float = 0.55,
+    gold_protection: float = 0.7,
+    seam_diagnostics: bool = True,
+    structure_recolor: bool = False,
+    ink_lightness: float = 0.48,
 ) -> dict:
     with manifest_path.open("r", encoding="utf-8") as f:
         plan = json.load(f)
@@ -1430,12 +1555,23 @@ def stitch_tiles(
     legacy_color_modes = {"source_reference", "custom_reference", "global", "reference"}
     if color_mode in legacy_color_modes:
         color_mode = "rgb_stats"
-    color_mode = color_mode if color_mode in {"none", "rgb_stats", "lab_reinhard", "seam_balance"} else "none"
+    color_mode = color_mode if color_mode in {"none", "rgb_stats", "lab_reinhard", "seam_balance", "palette_family"} else "none"
+    if structure_recolor and color_mode != "palette_family":
+        raise ValueError("统一灰阶与墨线实验只支持标准色谱迁移模式")
+    if structure_recolor and color_tiles is not None:
+        raise ValueError("统一灰阶与墨线实验请用‘选择图块’限定范围，不要同时填写‘调色图块’")
+    if structure_recolor and low_freq_strength > 0:
+        raise ValueError("统一灰阶与墨线实验已包含联合底灰校正，请关闭旧版低频颜色场校正")
+    if structure_recolor:
+        validate_structure_recolor_selection(plan, selected_tiles)
     if color_mode == "seam_balance":
+        seam_balance = True
+    if color_mode == "palette_family" and not structure_recolor:
         seam_balance = True
     feather_px = int(feather_px if feather_px is not None else plan.get("overlap_output_px", 20))
     if seam_balance:
-        preset = SEAM_BALANCE_PRESETS.get(seam_strength, SEAM_BALANCE_PRESETS["standard"])
+        initial_preset_name = "palette_residual" if color_mode == "palette_family" else seam_strength
+        preset = SEAM_BALANCE_PRESETS.get(initial_preset_name, SEAM_BALANCE_PRESETS["standard"])
         feather_px = max(feather_px, preset["feather"])
     missing = []
     placements = []
@@ -1448,7 +1584,37 @@ def stitch_tiles(
     source_img = None
     reference_source = "none"
     reference_whole_stats = None
-    if color_mode != "none":
+    palette_profile = None
+    palette_json_path = None
+    palette_preview_path = None
+    palette_reference_preview = None
+    palette_reference_mean = None
+    palette_reference_paths = palette_reference_paths or ([] if reference_path is None else [reference_path])
+    if color_mode == "palette_family":
+        if palette_profile_path:
+            palette_profile = load_palette_profile(palette_profile_path)
+            palette_json_path = palette_profile_path
+            reference_source = str(palette_profile_path)
+        elif palette_reference_paths:
+            reference_images = []
+            try:
+                for item in palette_reference_paths:
+                    reference_images.append(Image.open(item).convert("RGB"))
+                palette_profile = build_palette_profile(reference_images)
+                palette_json_path = save_palette_profile(palette_profile, out_dir / "standard_palette.json")
+                reference_source = "; ".join(str(item) for item in palette_reference_paths)
+            finally:
+                for image in reference_images:
+                    image.close()
+        else:
+            raise RuntimeError("标准色谱模式需要选择色谱 JSON，或至少一张标准色彩图")
+        palette_preview_path = render_palette_profile(palette_profile, out_dir / "standard_palette.png")
+        if palette_reference_paths:
+            with Image.open(palette_reference_paths[0]) as preview_source:
+                palette_reference_preview = preview_source.convert("RGB").copy()
+                palette_reference_preview.thumbnail((640, 640), Image.Resampling.LANCZOS)
+            palette_reference_mean = rounded_rgb_mean(palette_reference_preview)
+    if color_mode not in {"none", "palette_family", "seam_balance"}:
         try:
             source_path = reference_path if reference_path else resolve_image_path(plan.get("path", ""))
             if source_path.exists():
@@ -1498,7 +1664,34 @@ def stitch_tiles(
                 core_img = restored.crop((left, top, right, bottom)).copy()
                 paste_x = round(core[0] * scale)
                 paste_y = round(core[1] * scale)
-            if color_mode not in {"none", "seam_balance"} and (color_tiles is None or tile["tile_id"].upper() in color_tiles):
+            if color_mode == "palette_family" and not structure_recolor and (color_tiles is None or tile["tile_id"].upper() in color_tiles):
+                before_img = core_img.copy()
+                before_mean = rounded_rgb_mean(before_img)
+                core_img = apply_palette_profile(
+                    core_img,
+                    palette_profile,
+                    palette_strength,
+                    neutral_protection,
+                    skin_protection,
+                    gold_protection,
+                )
+                after_mean = rounded_rgb_mean(core_img)
+                color_matched += 1
+                color_tile_ids.append(tile["tile_id"])
+                color_changes.append({
+                    "tile_id": tile["tile_id"], "before_rgb_mean": before_mean,
+                    "after_rgb_mean": after_mean,
+                    "delta_rgb_mean": [after_mean[i] - before_mean[i] for i in range(3)],
+                })
+                if len(color_samples) < 12:
+                    color_samples.append({
+                        "tile_id": tile["tile_id"], "before": comparison_thumbnail(before_img),
+                        "after": comparison_thumbnail(core_img),
+                        "reference": comparison_thumbnail(palette_reference_preview) if palette_reference_preview else comparison_thumbnail(core_img),
+                        "before_mean": before_mean, "after_mean": after_mean,
+                        "reference_mean": palette_reference_mean or after_mean,
+                    })
+            elif color_mode not in {"none", "seam_balance"} and (color_tiles is None or tile["tile_id"].upper() in color_tiles):
                 reference = reference_whole_stats or source_reference_for_tile(plan, tile, source_img)
                 if reference is not None:
                     before_img = core_img.copy()
@@ -1521,9 +1714,9 @@ def stitch_tiles(
                         color_samples.append(
                             {
                                 "tile_id": tile["tile_id"],
-                                "before": before_img,
-                                "after": core_img.copy(),
-                                "reference": reference.copy(),
+                                "before": comparison_thumbnail(before_img),
+                                "after": comparison_thumbnail(core_img),
+                                "reference": comparison_thumbnail(reference),
                                 "before_mean": before_mean,
                                 "after_mean": after_mean,
                                 "reference_mean": reference_mean,
@@ -1532,9 +1725,48 @@ def stitch_tiles(
             placements.append((tile["tile_id"], paste_x, paste_y, core_img, tile))
     if source_img is not None:
         source_img.close()
+    structure_recolor_report = None
+    if structure_recolor and placements:
+        if missing or len(placements) != len(selected_tiles or set()):
+            raise ValueError(f"实验选区缺少修复图块：{', '.join(missing)}")
+        structure_before = {
+            tid: (comparison_thumbnail(img), rounded_rgb_mean(img))
+            for tid, _, _, img, _ in placements
+        }
+        placements, structure_recolor_report = apply_structure_recolor_placements(
+            placements, palette_profile, palette_strength, ink_lightness
+        )
+        color_matched = len(placements)
+        color_tile_ids = [item[0] for item in placements]
+        for tid, _, _, img, _ in placements:
+            before_thumb, before_mean = structure_before[tid]
+            after_mean = rounded_rgb_mean(img)
+            color_changes.append({
+                "tile_id": tid,
+                "before_rgb_mean": before_mean,
+                "after_rgb_mean": after_mean,
+                "delta_rgb_mean": [after_mean[i] - before_mean[i] for i in range(3)],
+            })
+            color_samples.append({
+                "tile_id": tid,
+                "before": before_thumb,
+                "after": comparison_thumbnail(img),
+                "reference": comparison_thumbnail(palette_reference_preview) if palette_reference_preview else comparison_thumbnail(img),
+                "before_mean": before_mean,
+                "after_mean": after_mean,
+                "reference_mean": palette_reference_mean or after_mean,
+            })
     seam_bias_report = []
+    diagnostic_before = (
+        analyze_placement_seams(placements, int(plan.get("rows", 1)), int(plan.get("cols", 1)))
+        if seam_balance and placements else []
+    )
     if seam_balance and placements:
-        preset = SEAM_BALANCE_PRESETS.get(seam_strength, SEAM_BALANCE_PRESETS["standard"])
+        preset_name = "palette_residual" if color_mode == "palette_family" else seam_strength
+        preset = SEAM_BALANCE_PRESETS.get(preset_name, SEAM_BALANCE_PRESETS["standard"])
+        allowed_pairs = {
+            (item["first"], item["second"]) for item in diagnostic_before if item.get("safe_for_color_balance")
+        }
         tile_images_for_solve = [(p[0], p[3], p[4]) for p in placements]
         biases = solve_seam_biases(
             tile_images_for_solve,
@@ -1543,22 +1775,35 @@ def stitch_tiles(
             preset["strip"],
             preset["inset"],
             preset["regularize"],
+            allowed_pairs,
+            ({p[0] for p in placements if color_tiles is not None and p[0].upper() not in color_tiles}
+             if color_mode == "palette_family" else None),
         )
         new_placements = []
         for tid, px, py, img, t in placements:
             bias = biases.get(tid, np.zeros(3, dtype=np.float32))
-            img = apply_tile_bias(img, bias, preset["max_bias"])
+            apply_bias = color_mode != "palette_family" or color_tiles is None or tid.upper() in color_tiles
+            if apply_bias:
+                img = apply_tile_bias(img, bias, preset["max_bias"])
+            else:
+                bias = np.zeros(3, dtype=np.float32)
             seam_bias_report.append({
                 "tile_id": tid,
                 "bias": [round(float(x), 2) for x in np.clip(bias, -preset["max_bias"], preset["max_bias"])],
             })
             new_placements.append((tid, px, py, img, t))
         placements = new_placements
-        color_matched = len(placements)
-        color_tile_ids = [p[0] for p in placements]
-        color_mode = "seam_balance"
+        if color_mode != "palette_family":
+            color_matched = len(placements)
+            color_tile_ids = [p[0] for p in placements]
+            color_mode = "seam_balance"
     if low_freq_strength > 0 and placements:
         placements = low_frequency_correct_placements(placements, plan, low_freq_strength)
+    seam_report = None
+    seam_results = []
+    if seam_diagnostics and placements:
+        seam_results = analyze_placement_seams(placements, int(plan.get("rows", 1)), int(plan.get("cols", 1)))
+        seam_report = write_seam_report(seam_results, out_dir)
     if mode == "complete" and missing:
         raise RuntimeError(f"完整拼合缺少 {len(missing)} 块：{', '.join(missing[:12])}")
     if not placements:
@@ -1632,6 +1877,15 @@ def stitch_tiles(
         "seam_strength": seam_strength,
         "seam_bias_report": seam_bias_report[:48],
         "low_freq_strength": low_freq_strength,
+        "palette_profile_path": str(palette_json_path) if palette_json_path else "",
+        "palette_preview_path": str(palette_preview_path) if palette_preview_path else "",
+        "palette_preview_url": f"/api/preview?path={quote(str(palette_preview_path))}" if palette_preview_path else "",
+        "palette_strength": palette_strength,
+        "structure_recolor": structure_recolor,
+        "ink_lightness": ink_lightness,
+        "structure_recolor_report": structure_recolor_report,
+        "seam_diagnostics": seam_results,
+        "seam_report": seam_report,
         "tile_ids": [item[0] for item in placements],
     }
 
@@ -1681,6 +1935,8 @@ class Handler(BaseHTTPRequestHandler):
                 kind = payload.get("kind", "image")
                 if kind == "manifest":
                     picked = choose_file("选择 tiles_manifest.json", [("JSON", "*.json"), ("All files", "*.*")])
+                elif kind == "palette":
+                    picked = choose_file("选择标准色谱 JSON", [("JSON", "*.json"), ("All files", "*.*")])
                 else:
                     picked = choose_file(
                         "选择壁画原图",
@@ -1716,6 +1972,30 @@ class Handler(BaseHTTPRequestHandler):
                 path = resolve_image_path(payload.get("path", ""))
                 info = image_info(path)
                 json_response(self, {**info, "preview_url": f"/api/preview?path={quote(str(path))}"})
+                return
+            if parsed.path == "/api/palette-profile":
+                paths = parse_paths(payload.get("reference_paths"))
+                if not paths:
+                    raise RuntimeError("请至少选择一张标准色彩图")
+                output_raw = payload.get("output_dir", "")
+                output = resolve_image_path(output_raw) if output_raw else OUTPUT_DIR / "palettes"
+                output.mkdir(parents=True, exist_ok=True)
+                images = []
+                try:
+                    images = [Image.open(path).convert("RGB") for path in paths]
+                    profile = build_palette_profile(images)
+                finally:
+                    for image in images:
+                        image.close()
+                json_path = save_palette_profile(profile, output / "standard_palette.json")
+                preview_path = render_palette_profile(profile, output / "standard_palette.png")
+                json_response(self, {
+                    "profile_path": str(json_path),
+                    "preview_path": str(preview_path),
+                    "preview_url": f"/api/preview?path={quote(str(preview_path))}",
+                    "reference_count": len(paths),
+                    "swatches": profile.get("swatches", []),
+                })
                 return
             if parsed.path == "/api/plan":
                 path = resolve_image_path(payload.get("path", ""))
@@ -1827,6 +2107,8 @@ class Handler(BaseHTTPRequestHandler):
                 output_dir = resolve_image_path(output_dir_raw) if output_dir_raw else None
                 reference_path_raw = payload.get("reference_path", "")
                 reference_path = resolve_image_path(reference_path_raw) if reference_path_raw else None
+                palette_path_raw = payload.get("palette_profile_path", "")
+                palette_path = resolve_image_path(palette_path_raw) if palette_path_raw else None
                 result = stitch_tiles(
                     manifest,
                     restored_dir,
@@ -1843,6 +2125,15 @@ class Handler(BaseHTTPRequestHandler):
                     bool(payload.get("seam_balance", False)),
                     payload.get("seam_strength", "standard"),
                     float(payload.get("low_freq_strength", 0.0)),
+                    palette_path,
+                    parse_paths(payload.get("palette_reference_paths")),
+                    float(payload.get("palette_strength", 0.85)),
+                    float(payload.get("neutral_protection", 0.9)),
+                    float(payload.get("skin_protection", 0.55)),
+                    float(payload.get("gold_protection", 0.7)),
+                    bool(payload.get("seam_diagnostics", True)),
+                    bool(payload.get("structure_recolor", False)),
+                    float(payload.get("ink_lightness", 0.48)),
                 )
                 json_response(self, result)
                 return

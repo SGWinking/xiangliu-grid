@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Xiangliu Grid v0.4.1</title>
+  <title>Xiangliu Grid v0.5.0</title>
   <style>
     :root {
       color-scheme: light;
@@ -293,6 +293,7 @@
       background-size: 20px 20px;
       background-position: 0 0, 0 10px, 10px -10px, -10px 0;
     }
+    .previewWrap.selectorActive { min-height: 0; }
     .previewWrap img {
       position: absolute;
       left: 0;
@@ -456,7 +457,7 @@
       <img src="/assets/logo.png" alt="">
       <div>
         <h1>Xiangliu Grid</h1>
-        <div class="version">Xiangliu Grid v0.4.1</div>
+        <div class="version">Xiangliu Grid v0.5.0</div>
       </div>
     </div>
     <div class="headerTools">
@@ -579,7 +580,8 @@
           <input id="restored" placeholder="可直接输入路径，也可点选择">
           <button id="pickRestored" class="secondary" style="width:100%; margin-top:8px">选择文件夹</button>
           <label>指定编号</label>
-          <textarea id="selectedTiles" placeholder="R01_C01, R01_C02, R02_C01"></textarea>
+          <textarea id="selectedTiles" placeholder="可在右侧拖框自动填入，也可手动输入 R01_C01, R01_C02"></textarea>
+          <button id="selectStitchTiles" style="width:100%; margin-top:8px">可视化选择图块</button>
         </div>
         <div class="block action">
           <h2>拼合设置与输出</h2>
@@ -607,7 +609,8 @@
           <label>颜色统一</label>
           <select id="colorMode">
             <option value="none">不处理</option>
-            <option value="seam_balance" selected>接缝平衡（推荐）：相邻块 RGB 偏移 + 宽羽化</option>
+            <option value="palette_family" selected>标准色谱迁移（推荐）：保留明度与质感</option>
+            <option value="seam_balance">旧版接缝平衡：相邻块 RGB 偏移 + 宽羽化</option>
             <option value="lab_reinhard">Lab Reinhard 色彩迁移（备选）</option>
             <option value="rgb_stats">基础模式：RGB 均值/标准差匹配</option>
           </select>
@@ -629,9 +632,32 @@
           </label>
           <label>调色图块（留空=全部调色，指定=仅对这些图块调色；接缝平衡建议留空）</label>
           <textarea id="colorTiles" placeholder="留空则全部调色；例如 R04_C01, R04_C02, R04_C03 仅调色第四行"></textarea>
-          <label>参考图路径（仅 Lab Reinhard / RGB stats 模式使用，接缝平衡不需要）</label>
-          <input id="referencePath" placeholder="可选。选择后按这张参考图统一；不选则按原始大图对应区域统一">
+          <label>旧模式参考图路径（仅 Lab Reinhard / RGB stats 使用）</label>
+          <input id="referencePath" placeholder="旧模式可选">
           <button id="pickReference" class="secondary" style="width:100%; margin-top:8px">选择参考图</button>
+          <label>标准色彩图（可填 1–2 张，用分号隔开）</label>
+          <textarea id="paletteReferences" placeholder="D:\标准图1.png；D:\标准图2.png"></textarea>
+          <div class="row" style="margin-top:8px">
+            <button id="addPaletteReference" class="secondary">添加标准图</button>
+            <button id="buildPalette" class="secondary">提取并保存色谱</button>
+          </div>
+          <label>标准色谱 JSON（可直接复用，不必每次重新提取）</label>
+          <input id="paletteProfile" placeholder="...\standard_palette.json">
+          <button id="pickPalette" class="secondary" style="width:100%; margin-top:8px">选择色谱 JSON</button>
+          <div class="row">
+            <label>迁移强度<input id="paletteStrength" type="number" min="0" max="1" step="0.05" value="0.85"></label>
+            <label>中性色保护<input id="neutralProtection" type="number" min="0" max="1" step="0.05" value="0.90"></label>
+          </div>
+          <div class="row">
+            <label>肤色保护<input id="skinProtection" type="number" min="0" max="1" step="0.05" value="0.55"></label>
+            <label>金色保护<input id="goldProtection" type="number" min="0" max="1" step="0.05" value="0.70"></label>
+          </div>
+          <label class="check"><input id="structureRecolor" type="checkbox">统一灰阶与墨线后再上色（实验，最多 9 块）</label>
+          <label>墨线明度（越大越淡）
+            <input id="inkLightness" type="number" min="0.25" max="0.65" step="0.01" value="0.48">
+          </label>
+          <div class="hint">实验模式请点左侧“可视化选择图块”，在右侧拖框选择连续矩形的相邻 4–9 块（2048 图建议 4 块）；不要同时填写“调色图块”，并关闭旧版低频颜色场校正。实验重上色沿用固定保护策略，上方三项旧保护参数暂不参与。</div>
+          <label class="check"><input id="seamDiagnostics" type="checkbox" checked>生成 20px 接缝、线稿冲突与亚像素偏移报告（只诊断，不改线）</label>
           <label>拼合输出文件夹</label>
           <input id="stitchOutput" placeholder="不填则输出到 manifest 同级 stitched 目录">
           <button id="pickStitchOutput" class="secondary" style="width:100%; margin-top:8px">选择输出</button>
@@ -774,7 +800,16 @@
     let quickPath = "";
     let resizePath = "";
     let patchSelector = null;
+    let selectorMode = null;
     let patchDragStart = null;
+
+    function resetTileSelector() {
+      patchSelector = null;
+      selectorMode = null;
+      patchDragStart = null;
+      $("previewWrap").classList.remove("selectorActive");
+      $("selectionBox").style.display = "none";
+    }
 
     function applyTheme(theme) {
       const dark = theme === "dark";
@@ -888,9 +923,8 @@
     function showOutputPreview(result) {
       const wrap = $("previewWrap");
       const preview = $("preview");
-      patchSelector = null;
+      resetTileSelector();
       $("grid").innerHTML = "";
-      $("selectionBox").style.display = "none";
       wrap.style.aspectRatio = `${result.canvas_width} / ${result.canvas_height}`;
       preview.removeAttribute("style");
       if (result.preview_url) preview.src = apiUrl(result.preview_url) + "&t=" + Date.now();
@@ -899,9 +933,8 @@
     function showPlainImagePreview(data) {
       const wrap = $("previewWrap");
       const preview = $("preview");
-      patchSelector = null;
+      resetTileSelector();
       $("grid").innerHTML = "";
-      $("selectionBox").style.display = "none";
       wrap.style.aspectRatio = `${data.width} / ${data.height}`;
       preview.removeAttribute("style");
       if (data.preview_url) preview.src = apiUrl(data.preview_url) + "&t=" + Date.now();
@@ -911,9 +944,8 @@
     function showPatchPreview(result) {
       const wrap = $("previewWrap");
       const preview = $("preview");
-      patchSelector = null;
+      resetTileSelector();
       $("grid").innerHTML = "";
-      $("selectionBox").style.display = "none";
       if (result.region) {
         wrap.style.aspectRatio = `${result.region.width} / ${result.region.height}`;
         $("size").textContent = `${result.region.width} x ${result.region.height}`;
@@ -930,10 +962,13 @@
       $("comparePanel").classList.remove("active");
     }
 
-    function showPatchSelector(data) {
+    function showPatchSelector(data, mode = "patch", selectorSource = null) {
+      data.selector_source = selectorSource;
       patchSelector = data;
+      selectorMode = mode;
       const wrap = $("previewWrap");
       const preview = $("preview");
+      wrap.classList.add("selectorActive");
       $("grid").innerHTML = "";
       $("selectionBox").style.display = "none";
       wrap.style.aspectRatio = `${data.width} / ${data.height}`;
@@ -947,21 +982,57 @@
       $("strideSize").textContent = "-";
       $("overlapStat").textContent = "-";
       $("scaleStat").textContent = "候选图";
-      setResult({summary: "候选图已加载。请在右侧预览图上拖框，系统会自动填入覆盖到的图块编号。"});
+      const summary = mode === "stitch"
+        ? "图块总览已加载。请在右侧拖框，选择连续矩形的相邻 4–9 块。"
+        : "候选图已加载。请在右侧预览图上拖框，系统会自动填入覆盖到的图块编号。";
+      setResult({summary});
       log("候选图已加载", data);
     }
 
     async function loadPatchSelector() {
-      const data = await post("/api/patch-selector-map", {
+      const selectorSource = {
         manifest_path: $("patchManifest").value.trim(),
         tiles_dir: $("patchTiles").value.trim()
+      };
+      const data = await post("/api/patch-selector-map", {
+        manifest_path: selectorSource.manifest_path,
+        tiles_dir: selectorSource.tiles_dir
       });
-      showPatchSelector(data);
+      showPatchSelector(data, "patch", selectorSource);
       return data;
     }
 
-    function selectPatchTilesFromBox(rect) {
-      if (!patchSelector || !patchSelector.tiles) return;
+    async function loadStitchSelector() {
+      const selectorSource = {
+        manifest_path: $("manifest").value.trim(),
+        tiles_dir: $("restored").value.trim()
+      };
+      const data = await post("/api/patch-selector-map", {
+        manifest_path: selectorSource.manifest_path,
+        tiles_dir: selectorSource.tiles_dir
+      });
+      showPatchSelector(data, "stitch", selectorSource);
+      return data;
+    }
+
+    function selectorInputsAreCurrent() {
+      if (!patchSelector || !patchSelector.selector_source) return false;
+      const source = patchSelector.selector_source;
+      const manifestId = selectorMode === "stitch" ? "manifest" : "patchManifest";
+      const tilesId = selectorMode === "stitch" ? "restored" : "patchTiles";
+      return source.manifest_path === $(manifestId).value.trim()
+        && source.tiles_dir === $(tilesId).value.trim();
+    }
+
+    function invalidateStaleSelector() {
+      if (selectorInputsAreCurrent()) return false;
+      resetTileSelector();
+      setResult({summary: "manifest 或图块文件夹已经变更，请重新点击可视化选择图块加载总览。"});
+      return true;
+    }
+
+    function tilesOverlappingBox(rect) {
+      if (!patchSelector || !patchSelector.tiles) return [];
       const wrap = $("previewWrap");
       const sx = patchSelector.width / wrap.clientWidth;
       const sy = patchSelector.height / wrap.clientHeight;
@@ -971,13 +1042,54 @@
         x2: Math.max(rect.x1, rect.x2) * sx,
         y2: Math.max(rect.y1, rect.y2) * sy
       };
-      const selected = patchSelector.tiles.filter(tile => {
+      return patchSelector.tiles.filter(tile => {
         const tx1 = tile.x, ty1 = tile.y, tx2 = tile.x + tile.w, ty2 = tile.y + tile.h;
         return tx1 < box.x2 && tx2 > box.x1 && ty1 < box.y2 && ty2 > box.y1;
-      }).map(tile => tile.tile_id);
+      });
+    }
+
+    function selectPatchTilesFromBox(rect) {
+      if (!patchSelector || !patchSelector.tiles) return;
+      const selected = tilesOverlappingBox(rect).map(tile => tile.tile_id);
       $("patchCandidates").value = selected.join(", ");
       $("gridStat").textContent = selected.length ? selected.join(", ") : "未选中图块";
       log("已根据框选范围填入候选图块", {selected_tiles: selected});
+    }
+
+    function selectStitchTilesFromBox(rect) {
+      const hits = tilesOverlappingBox(rect);
+      if (!hits.length) {
+        setResult({summary: "框选范围没有命中图块，请在图块画面内重新拖框。"});
+        return;
+      }
+      const minRow = Math.min(...hits.map(tile => tile.row));
+      const maxRow = Math.max(...hits.map(tile => tile.row));
+      const minCol = Math.min(...hits.map(tile => tile.col));
+      const maxCol = Math.max(...hits.map(tile => tile.col));
+      const rowCount = maxRow - minRow + 1;
+      const colCount = maxCol - minCol + 1;
+      const count = rowCount * colCount;
+      if (rowCount < 2 || colCount < 2 || count < 4 || count > 9) {
+        setResult({summary: "请选择连续矩形的相邻 4–9 块；2048 图建议直接圈 2×2。"});
+        log("框选范围不符合实验限制", {rows: rowCount, cols: colCount, count});
+        return;
+      }
+      const rectangle = patchSelector.tiles
+        .filter(tile => tile.row >= minRow && tile.row <= maxRow && tile.col >= minCol && tile.col <= maxCol)
+        .sort((a, b) => a.row - b.row || a.col - b.col);
+      const loaded = new Set(patchSelector.loaded_tiles || []);
+      const missing = rectangle.filter(tile => !loaded.has(tile.tile_id));
+      if (rectangle.length !== count || missing.length) {
+        const names = missing.map(tile => tile.tile_id).join(", ");
+        setResult({summary: `这个矩形里有缺失图块${names ? `：${names}` : ""}，请先补齐图片。`});
+        log("框选矩形存在缺图", {missing_tiles: missing.map(tile => tile.tile_id)});
+        return;
+      }
+      const selected = rectangle.map(tile => tile.tile_id);
+      $("selectedTiles").value = selected.join(", ");
+      $("gridStat").textContent = selected.join(", ");
+      setResult({summary: `已选择 ${rowCount}×${colCount}，共 ${selected.length} 块：${selected.join(", ")}`});
+      log("已写入拼合图块", {selected_tiles: selected});
     }
 
     async function runPatchAlign(apply) {
@@ -1027,6 +1139,7 @@
     }
 
     function layoutPreview(plan) {
+      resetTileSelector();
       const wrap = $("previewWrap");
       const preview = $("preview");
       wrap.style.aspectRatio = `${plan.working_width} / ${plan.working_height}`;
@@ -1258,7 +1371,9 @@
 
     $("previewWrap").addEventListener("mousedown", (e) => {
       if (!patchSelector) return;
-      if (!document.getElementById("patchPage").classList.contains("active")) return;
+      if (invalidateStaleSelector()) return;
+      const expectedPage = selectorMode === "stitch" ? "stitchPage" : "patchPage";
+      if (!document.getElementById(expectedPage).classList.contains("active")) return;
       const rect = $("previewWrap").getBoundingClientRect();
       patchDragStart = {x: e.clientX - rect.left, y: e.clientY - rect.top};
       const box = $("selectionBox");
@@ -1287,7 +1402,9 @@
       const rect = $("previewWrap").getBoundingClientRect();
       const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
       const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
-      selectPatchTilesFromBox({x1: patchDragStart.x, y1: patchDragStart.y, x2: x, y2: y});
+      const selection = {x1: patchDragStart.x, y1: patchDragStart.y, x2: x, y2: y};
+      if (selectorMode === "stitch") selectStitchTilesFromBox(selection);
+      else selectPatchTilesFromBox(selection);
       patchDragStart = null;
     });
 
@@ -1417,6 +1534,11 @@
       try { const picked = await pickFolder("选择已修复图片文件夹"); if (picked) $("restored").value = picked; }
       catch (err) { log("选择修复文件夹失败：" + err.message); }
     });
+    $("selectStitchTiles").addEventListener("click", async () => {
+      try { setBusy(true); await loadStitchSelector(); }
+      catch (err) { log("加载图块总览失败：" + err.message); }
+      finally { setBusy(false); }
+    });
     $("pickStitchOutput").addEventListener("click", async () => {
       try { const picked = await pickFolder("选择拼合输出文件夹"); if (picked) $("stitchOutput").value = picked; }
       catch (err) { log("选择拼合输出失败：" + err.message); }
@@ -1424,6 +1546,29 @@
     $("pickReference").addEventListener("click", async () => {
       try { const picked = await pickFile("image"); if (picked) $("referencePath").value = picked; }
       catch (err) { log("选择参考图失败：" + err.message); }
+    });
+    $("addPaletteReference").addEventListener("click", async () => {
+      try {
+        const picked = await pickFile("image");
+        if (picked) $("paletteReferences").value = [$('paletteReferences').value.trim(), picked].filter(Boolean).join("；");
+      } catch (err) { log("选择标准图失败：" + err.message); }
+    });
+    $("pickPalette").addEventListener("click", async () => {
+      try { const picked = await pickFile("palette"); if (picked) $("paletteProfile").value = picked; }
+      catch (err) { log("选择色谱失败：" + err.message); }
+    });
+    $("buildPalette").addEventListener("click", async () => {
+      try {
+        setBusy(true);
+        const result = await post("/api/palette-profile", {
+          reference_paths: $("paletteReferences").value.trim(),
+          output_dir: $("stitchOutput").value.trim()
+        });
+        $("paletteProfile").value = result.profile_path;
+        setResult({summary: `<strong>标准色谱已生成</strong><br>${result.reference_count} 张标准图<br>色谱：${result.profile_path}<br>预览：${result.preview_path}`});
+        log(`标准色谱已生成：${result.profile_path}`);
+      } catch (err) { log("提取色谱失败：" + err.message); }
+      finally { setBusy(false); }
     });
     $("stitch").addEventListener("click", async () => {
       try {
@@ -1442,14 +1587,26 @@
           color_tiles: $("colorTiles").value.trim(),
           trim_padding: $("trimPadding").value === "true",
           feather_px: Number($("featherPx").value),
-          reference_path: $("referencePath").value.trim()
+          reference_path: $("referencePath").value.trim(),
+          palette_reference_paths: $("paletteReferences").value.trim(),
+          palette_profile_path: $("paletteProfile").value.trim(),
+          palette_strength: Number($("paletteStrength").value),
+          neutral_protection: Number($("neutralProtection").value),
+          skin_protection: Number($("skinProtection").value),
+          gold_protection: Number($("goldProtection").value),
+          structure_recolor: $("structureRecolor").checked,
+          ink_lightness: Number($("inkLightness").value),
+          seam_diagnostics: $("seamDiagnostics").checked
         });
         setResult({
           summary: `
             <strong>${result.color_applied ? `已调色 ${result.color_matched_tiles} 块` : "未调色"}</strong>${result.seam_balance ? `（接缝平衡 ${result.seam_strength}）` : ""}${result.low_freq_strength > 0 ? `<br>低频校正：${result.low_freq_strength}` : ""}<br>
             输出：${result.out_path}<br>
             尺寸：${result.canvas_width} x ${result.canvas_height}${result.trim_padding ? "（已裁补色边）" : ""}<br>
-            拼合：${result.pasted} 块，缺 ${result.missing.length} 块，${result.blend_mode} ${result.feather_px}px
+            拼合：${result.pasted} 块，缺 ${result.missing.length} 块，${result.blend_mode} ${result.feather_px}px<br>
+            ${result.palette_profile_path ? `色谱：${result.palette_profile_path}<br>` : ""}
+            ${result.structure_recolor ? `联合灰阶与墨线：已启用，墨线明度 ${result.ink_lightness}<br>` : ""}
+            ${result.seam_report ? `接缝报告：${result.seam_report.html_path}` : ""}
           `
         });
         updateStitchStats(result);
@@ -1512,6 +1669,7 @@
     });
 
     $("clear").addEventListener("click", () => {
+      resetTileSelector();
       currentPath = "";
       quickPath = "";
       resizePath = "";
