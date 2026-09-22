@@ -9,6 +9,7 @@ from PIL import Image
 from PIL import ImageFilter
 
 from color_engine.color_space import oklab_to_rgb, rgb_to_oklab
+from color_engine.palette import level_hue_chroma
 
 
 @dataclass
@@ -30,7 +31,9 @@ def decompose_tile(image: Image.Image, bins: int = 24) -> TileLayers:
     hue = np.mod(np.arctan2(b, a), 2 * np.pi).astype(np.float32)
     family = (np.floor(hue / (2 * np.pi) * bins).astype(np.int16) % bins)
     degrees = np.mod(np.degrees(hue), 360.0)
-    neutral = np.clip((0.035 - chroma) / 0.025, 0.0, 1.0)
+    # 中性保护：墙底/纸底/土黄底（低彩度暖色）更强保护，避免饱和度增益把它们调黄。
+    # 阈值从 0.035 提到 0.05：chroma<0.02 完全保护，0.02~0.05 平滑过渡，>0.05（颜料）不保护。
+    neutral = np.clip((0.05 - chroma) / 0.03, 0.0, 1.0)
     skin = ((degrees >= 25) & (degrees <= 75) & (light >= 0.48) & (chroma <= 0.17)).astype(np.float32)
     gold = ((degrees >= 70) & (degrees <= 115) & (light >= 0.52) & (chroma >= 0.07)).astype(np.float32)
     protection = np.maximum(neutral * 0.95, np.maximum(skin * 0.55, gold * 0.72)).astype(np.float32)
@@ -38,41 +41,92 @@ def decompose_tile(image: Image.Image, bins: int = 24) -> TileLayers:
     return TileLayers(light, hue, chroma, family, protection, Image.fromarray(gray, "RGB"))
 
 
-def _nearest_families(profile: dict) -> list[dict | None]:
+def _nearest_family(profile: dict, index: int) -> tuple[dict | None, float]:
     bins = int(profile["bins"])
     populated = [family for family in profile["families"] if family["count"]]
-    return [
-        min(populated, key=lambda family: min((family["index"] - index) % bins, (index - family["index"]) % bins))
-        if populated else None
-        for index in range(bins)
-    ]
+    if not populated:
+        return None, 0.0
+    nearest = min(populated, key=lambda family: min((family["index"] - index) % bins, (index - family["index"]) % bins))
+    dist_bins = min((nearest["index"] - index) % bins, (index - nearest["index"]) % bins)
+    return nearest, dist_bins * (360.0 / bins)
 
 
-def recolor_tile(layers: TileLayers, corrected_l: np.ndarray, profile: dict, strength: float = 0.85) -> Image.Image:
+def recolor_tile(
+    layers: TileLayers,
+    corrected_l: np.ndarray,
+    profile: dict,
+    strength: float = 0.85,
+    saturation_gain: float = 1.0,
+    min_chroma: float = 0.035,
+    preserve_local_hue: bool = True,
+    max_hue_shift_deg: float = 45.0,
+) -> Image.Image:
+    """18 色网格矫正：按"源色相分族 + 明度分档（浅/基准/深）"把原图颜色矫正到
+    色卡对应档位颜色——明度来自灰阶归一化，色相与彩度向色卡档位矫正。
+    preserve_local_hue=True（默认）：色相只做有界矫正（max_hue_shift_deg），
+    且按源色相到族的距离衰减（中间色保留，不硬压缩）；
+    False：色相直接拉向族色相（强统一，消色相接缝，但会压缩中间色）。"""
     if corrected_l.shape != layers.structure_l.shape:
         raise ValueError("校正亮度层尺寸与结构底稿不一致")
     out_a = np.zeros_like(layers.source_chroma)
     out_b = np.zeros_like(layers.source_chroma)
     global_strength = np.clip(strength, 0.0, 1.0)
-    for index, family in enumerate(_nearest_families(profile)):
+    bins = int(profile["bins"])
+    for index in range(bins):
         mask = layers.family_index == index
-        if family is None or not np.any(mask):
+        if not np.any(mask):
             continue
-        target_chroma = float(family["chroma_median"])
-        # 原色只负责指出色族，不再携带每块 AI 自己生成的颜色浓度。
-        # 轻微的亮度调制模拟颜料在暗部更浓，但不引用 source_chroma，避免矩形色块被带回。
-        light_modulation = np.clip(1.10 - (corrected_l[mask] - 0.52) * 0.35, 0.86, 1.14)
-        # source_chroma 只作为“有色/无色”的软分类，不把原图块的色度数值带回输出。
-        colorful_confidence = np.clip((layers.source_chroma[mask] - 0.018) / 0.008, 0.0, 1.0)
+        family, dist = _nearest_family(profile, index)
+        if family is None:
+            continue
+        src_hue = layers.source_hue[mask]
+        src_c = layers.source_chroma[mask]
+        src_l = np.asarray(corrected_l, dtype=np.float32)[mask]
+        # 可信度：源图彩度越高越信任色相分桶；近中性（纸底/阴影/墨线）不做彩色矫正。
+        # 阈值放宽（0.015 起 / 0.04 满）：AI 修复块整体偏灰时也能向色卡靠，
+        # 纸底等真正中性像素 confidence≈0，混合权重 w≈0，仍完全不动。
+        colorful_confidence = np.clip((layers.source_chroma[mask] - 0.015) / 0.025, 0.0, 1.0)
+        # 目标 = 色卡该族该档的 (色相, 彩度)，按明度三档插值（18 色网格）
+        level_hue, level_c = level_hue_chroma(family, src_l)
+        # 饱和度增益的"资格"：
+        #   - 蓝/绿/红等非暖带：用源彩度相对该族基准彩度的比例（蓝族基准天生低也能变浓）
+        #   - 黄/橙暖带（40~90°，土黄底/墙底所在）：用严格绝对阈值，墙面不被调黄
+        family_median = max(float(family.get("chroma_median", 0.03)), 0.02)
+        relative = layers.source_chroma[mask] / family_median
+        absolute_gate = np.clip((layers.source_chroma[mask] - 0.015) / 0.010, 0.0, 1.0)
+        elig_rel = np.clip((relative - 0.4) / 0.6, 0.0, 1.0) * absolute_gate
+        src_degrees = np.mod(np.degrees(layers.source_hue[mask]), 360.0)
+        warm = (src_degrees >= 40.0) & (src_degrees <= 90.0)
+        elig_abs = np.clip((layers.source_chroma[mask] - 0.050) / 0.020, 0.0, 1.0) * absolute_gate
+        gain_eligibility = np.where(warm, elig_abs, elig_rel)
+        level_c = level_c * (1.0 + (max(saturation_gain, 0.0) - 1.0) * gain_eligibility)
+        # 轻微的亮度调制模拟颜料在暗部更浓，幅度温和（暗部 +3%）
+        light_modulation = np.clip(1.03 - (src_l - 0.52) * 0.25, 0.97, 1.06)
         protected_saturation = 1.0 - layers.protection[mask] * 0.35
-        desired_chroma = np.clip(
-            target_chroma * light_modulation * colorful_confidence * protected_saturation * global_strength,
-            0.0, 0.30,
+        # 目标彩度 = 色卡档位满值（confidence 不衰减目标，否则源图偏灰时永远靠不近色卡）。
+        # confidence 只在下方混合权重 w 里控制"混合多少"，近中性像素 w→0 仍完全不动。
+        desired_c = np.clip(
+            level_c * light_modulation * protected_saturation,
+            0.0, 0.40,
         )
-        desired_a = math.cos(float(family["hue"])) * desired_chroma
-        desired_b = math.sin(float(family["hue"])) * desired_chroma
-        out_a[mask] = desired_a
-        out_b[mask] = desired_b
+        # 色相矫正：默认向色卡档位色相做有界矫正，且按"源色相到族"的距离衰减——
+        # 族内（距离近）充分矫正，族间中间色（距离远）保留原色相，避免硬压缩。
+        if preserve_local_hue:
+            delta = np.mod(level_hue - src_hue + np.pi, 2 * np.pi) - np.pi
+            dist_rad = math.radians(max(dist, 0.0))
+            max_shift = math.radians(max_hue_shift_deg)
+            # 距离衰减：族内（<30°）几乎全量矫正；>60° 不矫正
+            attenuation = np.clip(1.0 - dist_rad / math.radians(60.0), 0.0, 1.0)
+            pull = np.clip(delta * global_strength * colorful_confidence * attenuation,
+                           -max_shift, max_shift)
+            new_hue = src_hue + pull
+        else:
+            new_hue = level_hue
+        # 彩度：源彩度与色卡档位彩度按可信度混合，保留原图浓度的一部分
+        w = global_strength * colorful_confidence
+        final_c = src_c * (1.0 - w) + desired_c * w
+        out_a[mask] = np.cos(new_hue) * final_c
+        out_b[mask] = np.sin(new_hue) * final_c
     result = np.stack((np.asarray(corrected_l, dtype=np.float32), out_a, out_b), axis=-1)
     return Image.fromarray(oklab_to_rgb(result), "RGB")
 
@@ -107,6 +161,12 @@ def joint_low_frequency_normalize(
         value_sum[sy:sy + sh, sx:sx + sw] += low
         weight_sum[sy:sy + sh, sx:sx + sw] += 1.0
     composite = value_sum / np.maximum(weight_sum, 1.0)
+    # 缺块空洞（weight_sum==0）用已有像素的中位数填充，避免 0 拉低邻近块的低频场（局部拼合可容忍缺块）
+    if np.any(weight_sum == 0):
+        filled = composite[weight_sum > 0]
+        fill_value = float(np.median(filled)) if filled.size else 0.5
+        composite = composite.copy()
+        composite[weight_sum == 0] = fill_value
     # 大半径只留下跨图块连续的光照/墙体底色趋势；矩形块状态被平均掉。
     target_field = _lowpass(composite, max(12.0, min(small_w, small_h) / 18.0))
 
@@ -148,10 +208,12 @@ def _shared_ink_lightness(
     return (ink_lightness + 0.005 - 0.010 * response).astype(np.float32)
 
 
-def _ink_shape_support(reliable: np.ndarray, residual: np.ndarray) -> np.ndarray:
-    # 将可靠核心向外扩 4 px，只接住同一笔画的抗锯齿/灰边；远处纸纹与暗面不参与。
+def _ink_shape_support(reliable: np.ndarray, residual: np.ndarray, expand_px: int = 2) -> np.ndarray:
+    # 将可靠核心向外扩若干像素，接住同一笔画的抗锯齿/灰边；远处纸纹与暗面不参与。
+    if expand_px <= 0:
+        return reliable & (residual > 1e-6)
     core = Image.fromarray(reliable.astype(np.uint8) * 255, "L")
-    near_core = np.asarray(core.filter(ImageFilter.MaxFilter(9)), dtype=np.uint8) > 0
+    near_core = np.asarray(core.filter(ImageFilter.MaxFilter(2 * expand_px + 1)), dtype=np.uint8) > 0
     return near_core & (residual > 1e-6)
 
 
@@ -160,6 +222,7 @@ def joint_grayscale_normalize(
     canvas_size: tuple[int, int],
     overlap: int = 20,
     ink_lightness: float = 0.48,
+    ink_expand_px: int = 2,
 ) -> tuple[list[tuple[str, int, int, np.ndarray]], dict]:
     if not 0.25 <= ink_lightness <= 0.65:
         raise ValueError("ink_lightness must be between 0.25 and 0.65")
@@ -188,7 +251,7 @@ def joint_grayscale_normalize(
         values = residual[reliable]
         target_l = _shared_ink_lightness(residual, input_q10, input_q90, ink_lightness)
         # 可靠核心只用于求浓淡；实际缩放覆盖同一线条的完整暗残差横截面。
-        shape_support = _ink_shape_support(reliable, residual)
+        shape_support = _ink_shape_support(reliable, residual, ink_expand_px)
         result = light.copy()
         if values.size:
             target_median = float(np.median(target_l[reliable]))

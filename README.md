@@ -1,6 +1,6 @@
 # Xiangliu Grid / 相柳网格
 
-**Version:** `0.4.1`
+**Version:** `0.5.1`
 
 <img src="assets/logo.png" alt="Xiangliu Grid logo" width="180">
 
@@ -72,7 +72,7 @@ Seam balance fixes edge mismatches between adjacent tiles. But if the entire upp
 
 1. Build a small thumbnail (600px wide) of the stitched image.
 2. Convert to LAB color space.
-3. For each channel (L, A, B), apply a **large-radius Gaussian blur** (radius ≈ 1/4 of thumbnail width) to extract the low-frequency drift field.
+3. Apply a **large-radius Gaussian blur** (radius ≈ 1/4 of thumbnail width) to extract the low-frequency drift field. In `auto` mode, L uses the selected strength while A/B use 35% of it; `lightness` mode leaves A/B untouched.
 4. Compute the global mean of the blurred field.
 5. The correction field = `blurred_field - global_mean`.
 6. **Upsample** the correction field to full resolution (it's smooth, so upsampling loses no information).
@@ -84,7 +84,8 @@ Seam balance fixes edge mismatches between adjacent tiles. But if the entire upp
 - The correction field is **smooth and low-frequency** — it only contains slow brightness/color drifts, not image content.
 - Upsampling a smooth field to full resolution is lossless (there's no high-frequency detail to lose).
 - The correction is applied to the **full-resolution original tiles**, not to an upscaled image. All mural details, brushstrokes, and textures are preserved at original resolution.
-- The `strength` parameter (0–1) controls how aggressively the drift is removed. 0.5 is a good default; 1.0 fully flattens large-area drift.
+- The UI keeps this simple: **Auto / Lightness only / Off**. Auto is the default and avoids over-flattening local color temperature.
+- **Reduce yellow substrate** restores low-chroma warm plaster/paper toward its pre-calibration global cast. A soft OKLab mask protects stronger red, green, and blue pigments.
 
 ### Stitching
 
@@ -193,6 +194,19 @@ R01_C01_x0_y0_v001.png
 
 ## Changelog
 
+### v0.5.1
+- **Simplified low-frequency controls**: the UI now offers Auto / Lightness only / Off. Auto applies full low-frequency lightness correction and only 35% color-temperature correction.
+- **Selective yellow-substrate reduction**: a 0–100% control restores low-chroma warm background toward the input tiles' global substrate cast while protecting stronger pigments.
+- **Fix yellow cast**: standard-palette recolor no longer shifts reds to yellow-brown.
+  - `apply_palette_profile`: hue now pulls at most ±10° with confidence weighting (was: hard pull to family hue), chroma scale capped at 1.35, near-neutral pixels barely move.
+  - `recolor_tile`: **18-color grid correction** (per your design: source hue picks the family + source lightness picks the level → the original color is corrected to the matching light/base/deep swatch, e.g. light red → 浅陶红, mid red → 基准赭红, deep red → 深栗红). Lightness comes from the grayscale normalization; hue/chroma are corrected toward the palette level. With `preserve_local_hue` checked (default) hue correction is bounded and mid-tones between families (cyan/purple) are preserved via distance attenuation (no hard compression); unchecked pulls all hues to palette levels (strong seam unification). `saturation_gain` default 1.0, removed the `min_chroma` floor, dark-area chroma boost reduced from +10% to +3%.
+- **Palette white balance**: `build_palette_profile` now estimates the reference's global warm cast from its least-saturated pixels and subtracts it, so a yellowed standard image no longer produces a yellowed palette. Recorded as `cast` in the profile; toggleable.
+- **Three lightness levels**: each family now keeps 浅/基准/深 (light/base/deep) `levels`; recoloring interpolates target chroma by pixel lightness instead of a single median.
+- **Multi-format palette loading**: `load_palette_profile` accepts (1) native profiles, (2) structured color cards `{cave, period, colors:[{family, level, name, hex}]}`, (3) simple swatch lists `{swatches:[{name, rgb|hex}]}`. White/black/neutral swatches are excluded from chromatic families automatically.
+- **One-click calibration (two-stage pipeline)**: "一键校准并拼合" now runs the full two-stage pipeline on all tiles without selecting any: stage 1 = decolor → joint grayscale/ink normalization (kills lightness seams) → 18-color grid correction (light/base/deep swatches from the palette); stage 2 = palette-residual seam balance + optional low-frequency correction → feather stitch → trim padding. `palette_family` mode is this two-stage pipeline (the old single-stage per-tile apply and the standalone "experiment mode" checkbox are removed). Defaults: palette strength 0.9, ink lightness 0.55, ink expand 1px. Falls back to the manifest source image when no palette is given. Palette preview now renders all swatches including white/black neutrals; the color-comparison reference shows the palette board.
+- **Frontend panel reorganized** into numbered sections: ① palette source, ② one-click calibration, ③ advanced parameters, ④ experiment mode, ⑤ other settings.
+- **Fix palette preview crash**: palette preview now loads a CJK font (fallback to default) instead of failing on Chinese swatch names.
+
 ### v0.4.1
 - Fixed low-frequency correction to apply per-tile at full resolution (no blur from upscaling).
 - Low-frequency correction now runs before stitching, not after.
@@ -282,7 +296,7 @@ The names **Xiangliu Grid** and **相柳网格**, as well as the project logo an
 
 1. 用缩略图（600px 宽）快速拼一个小图。
 2. 转 LAB 色彩空间。
-3. 对 L、A、B 每个通道做**大半径高斯模糊**（半径≈缩略图宽度的 1/4），提取低频漂移场。
+3. 做**大半径高斯模糊**（半径约为缩略图宽度的 1/4），提取低频漂移场。自动模式对 L 通道使用完整强度，对 A/B 色温通道只使用 35% 强度；仅明度模式不改 A/B。
 4. 算模糊场的全局均值。
 5. 校正场 = `模糊场 - 全局均值`。
 6. 把校正场**放大**到全尺寸（校正场是平滑的，放大不丢信息）。
@@ -294,7 +308,8 @@ The names **Xiangliu Grid** and **相柳网格**, as well as the project logo an
 - 校正场是**平滑的低频场**——只包含缓慢的明暗/色温漂移，不包含图像内容。
 - 把平滑场放大到全尺寸是无损的（没有高频细节会丢失）。
 - 校正施加在**全分辨率原图块**上，不是施加在放大后的图上。壁画的笔触、纹理、细节全部保留在原始分辨率。
-- `strength` 参数（0~1）控制校正强度。0.5 是推荐默认值；1.0 完全抹平大面积漂移。
+- 界面只保留「自动 / 仅明度 / 关闭」3 种模式。默认使用自动模式，避免把局部色温过度抹平。
+- 「减少黄底」会把低彩度墙底、纸底拉回校色前的全局底色；OKLab 软蒙版会保护彩度较高的红、绿、青等颜料。
 
 ### 拼合
 
@@ -402,6 +417,19 @@ R01_C01_x0_y0_v001.png
 - 接缝平衡建议配合"裁掉补色边"使用，避免补色区干扰颜色统计。
 
 ## 更新日志
+
+### v0.5.1
+- **简化低频控制**：界面改为「自动 / 仅明度 / 关闭」。自动模式完整校正低频明度，只使用 35% 强度校正色温。
+- **选择性减少黄底**：新增 0～100% 滑杆，把低彩度暖色背景拉回输入图块的全局底色，同时保护彩度较高的颜料色。
+- **修复发黄**：标准色谱上色不再把红变成土黄。
+  - `apply_palette_profile`：色相最多 ±10° 有界微调（原为硬拉到族色相），彩度缩放上限降到 1.35，近中性像素几乎不动。
+  - `recolor_tile`: **18 色网格矫正**（按你的设计意图：源色相分族 + 明度分档 → 把原图颜色矫正到色卡浅/基准/深对应档位，如浅红→浅陶红、中红→基准赭红、深红→深栗红）。明度来自灰阶归一化，色相/彩度向色卡档位矫正；勾选 preserve_local_hue 时色相有界矫正且中间色（青/紫等）按距离衰减保留（不硬压缩），取消勾选则强拉到色卡档位（强统一色相接缝）。`saturation_gain` 默认 1.0，去掉 `min_chroma` 垫底，暗部彩度加成从 +10% 降到 +3%。
+- **色卡白平衡**：`build_palette_profile` 从参考图彩度最低的像素估计全局色偏并扣除，标准图本身偏黄也不会导出偏黄的色卡；记入 profile 的 `cast`，可开关。
+- **三档明度**：每个色族保留 浅/基准/深 `levels`，上色时按像素明度插值目标彩度，不再用单一中位数。
+- **色卡多格式读取**：`load_palette_profile` 支持（1）工具生成格式、（2）结构化色卡 `{cave, period, colors:[{family, level, name, hex}]}`、（3）简单 swatches 列表 `{swatches:[{name, rgb|hex}]}`；白/黑/灰自动不进有彩色色族。
+- **一键校准（两阶段流水线）**：`palette_family` 模式即两阶段——第一阶段对全部图块 去色 → 联合灰阶/墨线归一化（消除块间明度差）→ 18 色网格矫正（按色卡浅/基准/深档位矫正）；第二阶段 palette_residual 接缝平衡 + 可选低频颜色场校正 → 羽化拼合 → 裁补色边。无需选择图块；旧的单阶段逐块 apply 与独立"实验模式"复选框已移除。默认参数：迁移强度 0.9、墨线明度 0.55、墨线外扩 1px；未给色卡时自动用 manifest 源图。色卡预览图现在包含白/黑中性色共 18 色，颜色对比图的 reference 直接显示色板。
+- **前端面板重排**：按编号分区（① 色卡来源 / ② 一键校准 / ③ 高级参数 / ④ 其他设置）。
+- **修复色卡预览崩溃**：预览图改用中文字体（失败回退默认），不再因中文色名报 latin-1 错误。
 
 ### v0.4.1
 - 修复低频校正：改为逐块在全分辨率上应用，不再因放大导致模糊。

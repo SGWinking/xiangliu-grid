@@ -441,6 +441,19 @@
       height: 22px;
       margin: 0;
     }
+    .sec-title {
+      margin: 18px 0 8px;
+      padding-top: 14px;
+      border-top: 1px dashed var(--line);
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .warn {
+      border-left: 4px solid #c0562c;
+      background: rgba(192, 86, 44, 0.08);
+      padding: 10px 12px;
+    }
     @media (max-width: 980px) {
       header { height: auto; min-height: 88px; align-items: flex-start; flex-direction: column; gap: 12px; padding: 18px; }
       main { grid-template-columns: 1fr; }
@@ -569,6 +582,9 @@
         </div>
         <div class="block">
           <h2>拼合依据</h2>
+          <div class="sec-title" style="margin-top:0; padding-top:0; border-top:0">最近拼合（点击恢复全部参数）</div>
+          <div id="stitchHistory" class="history"></div>
+          <div class="sec-title">拆分项目</div>
           <div id="history" class="history"></div>
           <label>tiles_manifest.json</label>
           <input id="manifest" placeholder="...\outputs\...\tiles_manifest.json">
@@ -621,49 +637,65 @@
               <option value="strong">强力（max_bias=24，羽化120）</option>
             </select>
           </label>
-          <label>低频颜色场校正（消除大面积明暗/色温漂移，拼合后对整图生效）
-            <select id="lowFreqStrength">
-              <option value="0" selected>关闭</option>
-              <option value="0.3">轻度（0.3）</option>
-              <option value="0.5">标准（0.5）</option>
-              <option value="0.7">较强（0.7）</option>
-              <option value="1.0">强力（1.0，完全校正）</option>
+          <label>低频均衡
+            <select id="lowFreqMode">
+              <option value="auto" selected>自动（推荐：统一明暗，保守修正色温）</option>
+              <option value="lightness">仅明度（完全保留原有冷暖）</option>
+              <option value="off">关闭</option>
             </select>
           </label>
-          <label>调色图块（留空=全部调色，指定=仅对这些图块调色；接缝平衡建议留空）</label>
-          <textarea id="colorTiles" placeholder="留空则全部调色；例如 R04_C01, R04_C02, R04_C03 仅调色第四行"></textarea>
-          <label>旧模式参考图路径（仅 Lab Reinhard / RGB stats 使用）</label>
-          <input id="referencePath" placeholder="旧模式可选">
-          <button id="pickReference" class="secondary" style="width:100%; margin-top:8px">选择参考图</button>
+
+          <div class="sec-title">① 标准色卡（三选一：标准图 / 色谱 JSON / 留空自动）</div>
           <label>标准色彩图（可填 1–2 张，用分号隔开）</label>
           <textarea id="paletteReferences" placeholder="D:\标准图1.png；D:\标准图2.png"></textarea>
           <div class="row" style="margin-top:8px">
             <button id="addPaletteReference" class="secondary">添加标准图</button>
             <button id="buildPalette" class="secondary">提取并保存色谱</button>
           </div>
-          <label>标准色谱 JSON（可直接复用，不必每次重新提取）</label>
-          <input id="paletteProfile" placeholder="...\standard_palette.json">
+          <label class="check"><input id="whiteBalance" type="checkbox" checked>自动白平衡标准图（扣除参考图自身色偏，避免输出发黄）</label>
+          <label>标准色谱 JSON（支持 3 种格式：本工具生成 / 结构化色卡 colors / 简单 swatches 列表）</label>
+          <input id="paletteProfile" placeholder="...\standard_palette.json 或 ...\61窟色卡.json">
           <button id="pickPalette" class="secondary" style="width:100%; margin-top:8px">选择色谱 JSON</button>
+
+          <div class="sec-title">② 一键标准色谱校准（推荐，无需选择图块）</div>
+          <button id="calibrateOneClick" class="cream" style="width:100%; margin-top:8px">一键校准并拼合：灰阶统一+18色矫正 → 接缝平衡 → 低频均衡 → 拼合</button>
+          <div class="hint">默认自动统一大面积明暗，只保守修正图块间色温差，不改变整幅画的总体冷暖。若未填色卡则自动按源图区域生成。全图 48 块 2048 时峰值内存约 10–15GB。</div>
+
+          <div class="sec-title">③ 高级参数</div>
           <div class="row">
-            <label>迁移强度<input id="paletteStrength" type="number" min="0" max="1" step="0.05" value="0.85"></label>
-            <label>中性色保护<input id="neutralProtection" type="number" min="0" max="1" step="0.05" value="0.90"></label>
+            <label>迁移强度<input id="paletteStrength" type="number" min="0" max="1" step="0.05" value="0.9"></label>
+            <label>饱和度增益<input id="saturationGain" type="number" min="0" max="5" step="0.1" value="1.0"></label>
           </div>
-          <div class="row">
-            <label>肤色保护<input id="skinProtection" type="number" min="0" max="1" step="0.05" value="0.55"></label>
-            <label>金色保护<input id="goldProtection" type="number" min="0" max="1" step="0.05" value="0.70"></label>
-          </div>
-          <label class="check"><input id="structureRecolor" type="checkbox">统一灰阶与墨线后再上色（实验，最多 9 块）</label>
-          <label>墨线明度（越大越淡）
-            <input id="inkLightness" type="number" min="0.25" max="0.65" step="0.01" value="0.48">
+          <label>减少黄底 <span id="yellowReductionValue">0%</span>
+            <input id="yellowReduction" type="range" min="0" max="100" step="5" value="0">
           </label>
-          <div class="hint">实验模式请点左侧“可视化选择图块”，在右侧拖框选择连续矩形的相邻 4–9 块（2048 图建议 4 块）；不要同时填写“调色图块”，并关闭旧版低频颜色场校正。实验重上色沿用固定保护策略，上方三项旧保护参数暂不参与。</div>
+          <div class="hint">只压低彩度的暖色墙底和纸底，红、绿、青等高彩度颜料会被保护。建议从 20% 慢慢增加。</div>
+          <div class="row">
+            <label>中性色保护<input id="neutralProtection" type="number" min="0" max="1" step="0.05" value="0.90"></label>
+            <label>肤色保护<input id="skinProtection" type="number" min="0" max="1" step="0.05" value="0.55"></label>
+          </div>
+          <div class="row">
+            <label>金色保护<input id="goldProtection" type="number" min="0" max="1" step="0.05" value="0.70"></label>
+            <label>墨线明度（越大越淡）<input id="inkLightness" type="number" min="0.25" max="0.65" step="0.01" value="0.55"></label>
+          </div>
+          <div class="row">
+            <label>墨线外扩（px，0=不加粗）<input id="inkExpandPx" type="number" min="0" max="6" step="1" value="1"></label>
+            <label></label>
+          </div>
+
+          <div class="sec-title">④ 其他设置</div>
+          <label>调色图块（留空=全部调色，指定=仅对这些图块调色；接缝平衡建议留空）</label>
+          <textarea id="colorTiles" placeholder="留空则全部调色；例如 R04_C01, R04_C02, R04_C03 仅调色第四行"></textarea>
+          <label>旧模式参考图路径（仅 Lab Reinhard / RGB stats 使用）</label>
+          <input id="referencePath" placeholder="旧模式可选">
+          <button id="pickReference" class="secondary" style="width:100%; margin-top:8px">选择参考图</button>
           <label class="check"><input id="seamDiagnostics" type="checkbox" checked>生成 20px 接缝、线稿冲突与亚像素偏移报告（只诊断，不改线）</label>
           <label>拼合输出文件夹</label>
           <input id="stitchOutput" placeholder="不填则输出到 manifest 同级 stitched 目录">
           <button id="pickStitchOutput" class="secondary" style="width:100%; margin-top:8px">选择输出</button>
           <label>输出文件名</label>
           <input id="outName" value="stitched_result.png">
-          <button id="stitch" class="cream" style="width:100%; margin-top:10px">开始拼合</button>
+          <button id="stitch" class="cream" style="width:100%; margin-top:10px">开始拼合（按上方设置）</button>
         </div>
       </div>
 
@@ -983,7 +1015,7 @@
       $("overlapStat").textContent = "-";
       $("scaleStat").textContent = "候选图";
       const summary = mode === "stitch"
-        ? "图块总览已加载。请在右侧拖框，选择连续矩形的相邻 4–9 块。"
+        ? "图块总览已加载。请在右侧拖框，选择连续矩形的相邻 4–64 块。"
         : "候选图已加载。请在右侧预览图上拖框，系统会自动填入覆盖到的图块编号。";
       setResult({summary});
       log("候选图已加载", data);
@@ -1069,8 +1101,8 @@
       const rowCount = maxRow - minRow + 1;
       const colCount = maxCol - minCol + 1;
       const count = rowCount * colCount;
-      if (rowCount < 2 || colCount < 2 || count < 4 || count > 9) {
-        setResult({summary: "请选择连续矩形的相邻 4–9 块；2048 图建议直接圈 2×2。"});
+      if (rowCount < 2 || colCount < 2 || count < 4 || count > 64) {
+        setResult({summary: "请选择连续矩形的相邻 4–64 块（连续矩形）。"});
         log("框选范围不符合实验限制", {rows: rowCount, cols: colCount, count});
         return;
       }
@@ -1334,13 +1366,79 @@
       }
     }
 
+    function applyStitchHistory(settings) {
+      const fields = {
+        manifest_path: "manifest",
+        restored_dir: "restored",
+        out_name: "outName",
+        output_dir: "stitchOutput",
+        mode: "stitchMode",
+        selected_tiles: "selectedTiles",
+        blend_mode: "blendMode",
+        color_mode: "colorMode",
+        seam_strength: "seamStrength",
+        low_freq_mode: "lowFreqMode",
+        color_tiles: "colorTiles",
+        feather_px: "featherPx",
+        reference_path: "referencePath",
+        palette_reference_paths: "paletteReferences",
+        palette_profile_path: "paletteProfile",
+        palette_strength: "paletteStrength",
+        saturation_gain: "saturationGain",
+        neutral_protection: "neutralProtection",
+        skin_protection: "skinProtection",
+        gold_protection: "goldProtection",
+        ink_lightness: "inkLightness",
+        ink_expand_px: "inkExpandPx"
+      };
+      Object.entries(fields).forEach(([key, id]) => {
+        if (settings[key] !== undefined && settings[key] !== null) $(id).value = settings[key];
+      });
+      if (settings.trim_padding !== undefined) $("trimPadding").value = String(Boolean(settings.trim_padding));
+      if (settings.seam_diagnostics !== undefined) $("seamDiagnostics").checked = Boolean(settings.seam_diagnostics);
+      if (settings.yellow_reduction !== undefined) {
+        $("yellowReduction").value = Math.round(Number(settings.yellow_reduction) * 100);
+        $("yellowReductionValue").textContent = `${$("yellowReduction").value}%`;
+      }
+    }
+
+    function addEmptyHistory(box, text) {
+      const empty = document.createElement("button");
+      empty.type = "button";
+      empty.disabled = true;
+      empty.textContent = text;
+      box.appendChild(empty);
+    }
+
     async function loadHistory() {
       const box = $("history");
+      const stitchBox = $("stitchHistory");
       box.innerHTML = "";
+      stitchBox.innerHTML = "";
       try {
         const data = await get("/api/history");
+        const stitchItems = data.stitch_items || [];
+        if (!stitchItems.length) {
+          addEmptyHistory(stitchBox, "暂无拼合记录");
+        } else {
+          stitchItems.forEach(item => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            const title = document.createElement("span");
+            title.textContent = item.job_name || "拼合记录";
+            const detail = document.createElement("small");
+            const size = item.canvas_width && item.canvas_height ? `${item.canvas_width} × ${item.canvas_height}` : "";
+            detail.textContent = [item.updated_at, size, item.out_path].filter(Boolean).join(" · ");
+            btn.append(title, detail);
+            btn.addEventListener("click", () => {
+              applyStitchHistory(item.settings || {});
+              setResult({summary: `<strong>已恢复拼合参数</strong><br>${item.updated_at || ""}<br>${item.out_path || ""}`});
+            });
+            stitchBox.appendChild(btn);
+          });
+        }
         if (!data.items.length) {
-          box.innerHTML = "<button type='button'>暂无历史记录</button>";
+          addEmptyHistory(box, "暂无拆分记录");
           return;
         }
         data.items.forEach(item => {
@@ -1355,7 +1453,8 @@
           box.appendChild(btn);
         });
       } catch (err) {
-        box.innerHTML = `<button type="button">暂无历史记录<small>如果一直显示这里，请重启 Xiangliu Grid</small></button>`;
+        addEmptyHistory(stitchBox, "拼合记录读取失败，请重启 Xiangliu Grid");
+        addEmptyHistory(box, "拆分记录读取失败，请重启 Xiangliu Grid");
       }
     }
 
@@ -1562,14 +1661,71 @@
         setBusy(true);
         const result = await post("/api/palette-profile", {
           reference_paths: $("paletteReferences").value.trim(),
-          output_dir: $("stitchOutput").value.trim()
+          output_dir: $("stitchOutput").value.trim(),
+          white_balance: $("whiteBalance").checked
         });
         $("paletteProfile").value = result.profile_path;
-        setResult({summary: `<strong>标准色谱已生成</strong><br>${result.reference_count} 张标准图<br>色谱：${result.profile_path}<br>预览：${result.preview_path}`});
+        setResult({summary: `<strong>标准色谱已生成</strong><br>${result.reference_count} 张标准图${result.white_balance ? "<br>已自动白平衡（扣除参考图色偏）" : ""}<br>色谱：${result.profile_path}<br>预览：${result.preview_path}`});
         log(`标准色谱已生成：${result.profile_path}`);
       } catch (err) { log("提取色谱失败：" + err.message); }
       finally { setBusy(false); }
     });
+    $("yellowReduction").addEventListener("input", () => {
+      $("yellowReductionValue").textContent = `${$("yellowReduction").value}%`;
+    });
+    $("calibrateOneClick").addEventListener("click", async () => {
+      try {
+        setBusy(true);
+        const result = await post("/api/stitch", {
+          manifest_path: $("manifest").value.trim(),
+          restored_dir: $("restored").value.trim(),
+          out_name: $("outName").value.trim() || "calibrated_result.png",
+          output_dir: $("stitchOutput").value.trim(),
+          mode: "full",
+          selected_tiles: "",
+          blend_mode: "feather",
+          color_mode: "palette_family",
+          seam_strength: "standard",
+          low_freq_strength: $("lowFreqMode").value === "off" ? 0 : 0.5,
+          low_freq_mode: $("lowFreqMode").value,
+          yellow_reduction: Number($("yellowReduction").value) / 100,
+          color_tiles: "",
+          trim_padding: true,
+          feather_px: 20,
+          reference_path: $("referencePath").value.trim(),
+          palette_reference_paths: $("paletteReferences").value.trim(),
+          palette_profile_path: $("paletteProfile").value.trim(),
+          palette_strength: Number($("paletteStrength").value),
+          saturation_gain: Number($("saturationGain").value),
+          neutral_protection: Number($("neutralProtection").value),
+          skin_protection: Number($("skinProtection").value),
+          gold_protection: Number($("goldProtection").value),
+          ink_lightness: Number($("inkLightness").value),
+          ink_expand_px: Number($("inkExpandPx").value),
+          seam_diagnostics: $("seamDiagnostics").checked
+        });
+        setResult({
+          summary: `
+            <strong>一键校准完成：已调色 ${result.color_matched_tiles} 块</strong><br>
+            输出：${result.out_path}<br>
+            尺寸：${result.canvas_width} x ${result.canvas_height}（已裁补色边）<br>
+            拼合：${result.pasted} 块，缺 ${result.missing.length} 块<br>
+            ${result.structure_recolor ? `两阶段：灰阶归一化+18色矫正 → 接缝平衡 ${result.seam_strength}<br>` : ""}
+            ${result.palette_profile_path ? `色谱：${result.palette_profile_path}<br>` : ""}
+            ${result.seam_report ? `接缝报告：${result.seam_report.html_path}` : ""}
+          `
+        });
+        updateStitchStats(result);
+        showOutputPreview(result);
+        showColorCompare(result);
+        log(`一键校准完成：已拼 ${result.pasted} 块，已调色 ${result.color_matched_tiles} 块`);
+      } catch (err) {
+        log("一键校准失败：" + err.message);
+      } finally {
+        setBusy(false);
+      }
+    });
+
     $("stitch").addEventListener("click", async () => {
       try {
         setBusy(true);
@@ -1583,7 +1739,9 @@
           blend_mode: $("blendMode").value,
           color_mode: $("colorMode").value,
           seam_strength: $("seamStrength").value,
-          low_freq_strength: Number($("lowFreqStrength").value),
+          low_freq_strength: $("lowFreqMode").value === "off" ? 0 : 0.5,
+          low_freq_mode: $("lowFreqMode").value,
+          yellow_reduction: Number($("yellowReduction").value) / 100,
           color_tiles: $("colorTiles").value.trim(),
           trim_padding: $("trimPadding").value === "true",
           feather_px: Number($("featherPx").value),
@@ -1591,21 +1749,22 @@
           palette_reference_paths: $("paletteReferences").value.trim(),
           palette_profile_path: $("paletteProfile").value.trim(),
           palette_strength: Number($("paletteStrength").value),
+          saturation_gain: Number($("saturationGain").value),
           neutral_protection: Number($("neutralProtection").value),
           skin_protection: Number($("skinProtection").value),
           gold_protection: Number($("goldProtection").value),
-          structure_recolor: $("structureRecolor").checked,
           ink_lightness: Number($("inkLightness").value),
+          ink_expand_px: Number($("inkExpandPx").value),
           seam_diagnostics: $("seamDiagnostics").checked
         });
         setResult({
           summary: `
-            <strong>${result.color_applied ? `已调色 ${result.color_matched_tiles} 块` : "未调色"}</strong>${result.seam_balance ? `（接缝平衡 ${result.seam_strength}）` : ""}${result.low_freq_strength > 0 ? `<br>低频校正：${result.low_freq_strength}` : ""}<br>
+            <strong>${result.color_applied ? `已调色 ${result.color_matched_tiles} 块` : "未调色"}</strong>${result.seam_balance ? `（接缝平衡 ${result.seam_strength}）` : ""}${result.low_freq_strength > 0 ? `<br>低频均衡：${result.low_freq_mode}` : ""}${result.yellow_reduction > 0 ? `，减少黄底 ${Math.round(result.yellow_reduction * 100)}%` : ""}<br>
             输出：${result.out_path}<br>
             尺寸：${result.canvas_width} x ${result.canvas_height}${result.trim_padding ? "（已裁补色边）" : ""}<br>
             拼合：${result.pasted} 块，缺 ${result.missing.length} 块，${result.blend_mode} ${result.feather_px}px<br>
+            ${result.structure_recolor ? `两阶段：灰阶归一化+18色矫正 → 接缝平衡 ${result.seam_strength}<br>` : ""}
             ${result.palette_profile_path ? `色谱：${result.palette_profile_path}<br>` : ""}
-            ${result.structure_recolor ? `联合灰阶与墨线：已启用，墨线明度 ${result.ink_lightness}<br>` : ""}
             ${result.seam_report ? `接缝报告：${result.seam_report.html_path}` : ""}
           `
         });

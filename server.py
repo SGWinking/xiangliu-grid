@@ -23,6 +23,11 @@ from color_engine.palette import (
     render_palette_profile,
     save_palette_profile,
 )
+from color_engine.corrections import (
+    estimate_low_chroma_cast,
+    reduce_warm_cast,
+    resolve_low_frequency_strengths,
+)
 from color_engine.report import write_seam_report
 from color_engine.seams import analyze_placement_seams
 from experiments.structure_recolor.engine import decompose_tile, joint_grayscale_normalize, recolor_tile
@@ -42,9 +47,11 @@ INPUT_DIR = ROOT / "inputs"
 OUTPUT_DIR = ROOT / "outputs"
 PREVIEW_DIR = OUTPUT_DIR / "_previews"
 HISTORY_FILE = OUTPUT_DIR / "manifest_history.json"
+STITCH_HISTORY_FILE = OUTPUT_DIR / "stitch_history.json"
 DEFAULT_PORT = 8765
 APP_NAME = "Xiangliu Grid"
 APP_VERSION = "0.5.0"
+MAX_STRUCTURE_RECOLOR_TILES = 64
 
 for directory in (INPUT_DIR, OUTPUT_DIR, PREVIEW_DIR):
     directory.mkdir(parents=True, exist_ok=True)
@@ -242,6 +249,71 @@ def list_manifest_history() -> list[dict]:
             }
         )
     return items[:30]
+
+
+STITCH_HISTORY_FIELDS = (
+    "manifest_path",
+    "restored_dir",
+    "out_name",
+    "output_dir",
+    "mode",
+    "selected_tiles",
+    "blend_mode",
+    "color_mode",
+    "seam_strength",
+    "low_freq_strength",
+    "low_freq_mode",
+    "yellow_reduction",
+    "color_tiles",
+    "trim_padding",
+    "feather_px",
+    "reference_path",
+    "palette_reference_paths",
+    "palette_profile_path",
+    "palette_strength",
+    "saturation_gain",
+    "neutral_protection",
+    "skin_protection",
+    "gold_protection",
+    "ink_lightness",
+    "ink_expand_px",
+    "seam_diagnostics",
+)
+
+
+def load_stitch_history() -> list[dict]:
+    if not STITCH_HISTORY_FILE.exists():
+        return []
+    try:
+        with STITCH_HISTORY_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def save_stitch_history(items: list[dict]) -> None:
+    STITCH_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with STITCH_HISTORY_FILE.open("w", encoding="utf-8") as f:
+        json.dump(items[:10], f, ensure_ascii=False, indent=2)
+
+
+def remember_stitch_history(payload: dict, result: dict) -> None:
+    settings = {key: payload.get(key) for key in STITCH_HISTORY_FIELDS if key in payload}
+    signature = json.dumps(settings, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    items = [item for item in load_stitch_history() if item.get("signature") != signature]
+    manifest = Path(str(settings.get("manifest_path") or ""))
+    item = {
+        "job_name": settings.get("out_name") or manifest.parent.name or "拼合记录",
+        "settings": settings,
+        "out_path": str(result.get("out_path", "")),
+        "canvas_width": int(result.get("canvas_width", 0)),
+        "canvas_height": int(result.get("canvas_height", 0)),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "signature": signature,
+    }
+    items.insert(0, item)
+    save_stitch_history(items)
 
 
 def read_json(handler: BaseHTTPRequestHandler) -> dict:
@@ -1355,15 +1427,19 @@ def low_frequency_correct_placements(
     placements: list[tuple[str, int, int, Image.Image, dict]],
     plan: dict,
     strength: float = 0.5,
+    mode: str = "auto",
     small_width: int = 600,
 ) -> list[tuple[str, int, int, Image.Image, dict]]:
     """逐块低频校正：先用缩略图估算低频校正场，再放大校正场应用到每块全分辨率原图。
     校正场是平滑的低频场，相邻块的校正值在边界处几乎一致，不会引入新接缝。
     原图全分辨率细节完全保留，只修正大面积明暗/色温漂移。"""
-    if strength <= 0 or not placements:
+    lightness_strength, temperature_strength = resolve_low_frequency_strengths(mode, strength)
+    if (lightness_strength <= 0 and temperature_strength <= 0) or not placements:
         return placements
-    canvas_w = int(plan["width"])
-    canvas_h = int(plan["height"])
+    # Use the real placement extent. With trim_padding disabled, the last tile can
+    # extend beyond the source width/height into the manifest's padded work area.
+    canvas_w = max(int(plan["width"]), max(px + img.width for _, px, _, img, _ in placements))
+    canvas_h = max(int(plan["height"]), max(py + img.height for _, _, py, img, _ in placements))
     scale = small_width / canvas_w
     small_w = small_width
     small_h = max(1, round(canvas_h * scale))
@@ -1395,14 +1471,15 @@ def low_frequency_correct_placements(
     small_lab = small_img.convert("LAB")
     radius = max(10, small_w // 4)
     correction_fields_full = []
-    for ch in small_lab.split():
+    for index, ch in enumerate(small_lab.split()):
         arr = np.asarray(ch, dtype=np.float32)
         blurred = Image.fromarray(arr.astype(np.uint8), "L").filter(
             ImageFilter.GaussianBlur(radius=radius)
         )
         blurred_arr = np.asarray(blurred, dtype=np.float32)
         global_mean = float(blurred_arr.mean())
-        correction_small = (blurred_arr - global_mean) * strength
+        channel_strength = lightness_strength if index == 0 else temperature_strength
+        correction_small = (blurred_arr - global_mean) * channel_strength
         # 放大校正场到全尺寸（校正场是平滑的，放大不会丢信息）
         corr_img = Image.fromarray(correction_small, "F")
         corr_full = corr_img.resize((canvas_w, canvas_h), Image.Resampling.BILINEAR)
@@ -1461,9 +1538,14 @@ def apply_structure_recolor_placements(
     palette_profile: dict,
     palette_strength: float,
     ink_lightness: float,
+    saturation_gain: float = 1.0,
+    ink_expand_px: int = 2,
+    preserve_local_hue: bool = True,
 ) -> tuple[list[tuple[str, int, int, Image.Image, dict]], dict]:
-    if len(placements) > 9:
-        raise ValueError("统一灰阶与墨线实验第一版最多处理 9 块，请先用‘选择图块’限定范围")
+    if len(placements) > MAX_STRUCTURE_RECOLOR_TILES:
+        raise ValueError(
+            f"统一灰阶与墨线实验最多处理 {MAX_STRUCTURE_RECOLOR_TILES} 块，请先用‘选择图块’限定范围"
+        )
     if not placements:
         return [], {"tiles": {}, "ink_lightness": ink_lightness}
     min_x = min(item[1] for item in placements)
@@ -1480,10 +1562,11 @@ def apply_structure_recolor_placements(
         (max_x - min_x, max_y - min_y),
         overlap=20,
         ink_lightness=ink_lightness,
+        ink_expand_px=ink_expand_px,
     )
     lights = {item[0]: item[3] for item in normalized}
     processed = [
-        (tile_id, x, y, recolor_tile(layers[tile_id], lights[tile_id], palette_profile, palette_strength), tile)
+        (tile_id, x, y, recolor_tile(layers[tile_id], lights[tile_id], palette_profile, palette_strength, saturation_gain, preserve_local_hue=preserve_local_hue), tile)
         for tile_id, x, y, _, tile in placements
     ]
     return processed, report
@@ -1491,11 +1574,11 @@ def apply_structure_recolor_placements(
 
 def validate_structure_recolor_selection(plan: dict, selected_tiles: set[str] | None) -> None:
     if not selected_tiles:
-        raise ValueError("统一灰阶与墨线实验必须先用‘选择图块’指定相邻 4–9 块")
+        raise ValueError(f"统一灰阶与墨线实验必须先用‘选择图块’指定相邻 4–{MAX_STRUCTURE_RECOLOR_TILES} 块")
     if len(selected_tiles) < 4:
         raise ValueError("统一灰阶与墨线实验至少选择 4 块相邻图块")
-    if len(selected_tiles) > 9:
-        raise ValueError("统一灰阶与墨线实验第一版最多处理 9 块")
+    if len(selected_tiles) > MAX_STRUCTURE_RECOLOR_TILES:
+        raise ValueError(f"统一灰阶与墨线实验最多处理 {MAX_STRUCTURE_RECOLOR_TILES} 块")
     by_id = {tile["tile_id"].upper(): tile for tile in plan.get("tiles", [])}
     missing = sorted(selected_tiles - set(by_id))
     if missing:
@@ -1507,17 +1590,6 @@ def validate_structure_recolor_selection(plan: dict, selected_tiles: set[str] | 
     actual = {(int(tile["row"]), int(tile["col"])) for tile in chosen}
     if actual != expected:
         raise ValueError("统一灰阶与墨线实验要求选择连续的矩形相邻图块")
-    total_pixels = 0
-    for tile in chosen:
-        if plan.get("layout_mode") == "fixed_3x4":
-            rect = tile["tile_rect"]
-            total_pixels += int(rect[2]) * int(rect[3])
-        else:
-            core = tile["core"]
-            scale = float(plan["scale"])
-            total_pixels += round(core[2] * scale) * round(core[3] * scale)
-    if total_pixels > 20_000_000:
-        raise ValueError("实验选区超过 2000 万像素；2048 图请先选择相邻 4 块")
 
 
 def stitch_tiles(
@@ -1536,15 +1608,20 @@ def stitch_tiles(
     seam_balance: bool = False,
     seam_strength: str = "standard",
     low_freq_strength: float = 0.0,
+    low_freq_mode: str = "auto",
+    yellow_reduction: float = 0.0,
     palette_profile_path: Path | None = None,
     palette_reference_paths: list[Path] | None = None,
     palette_strength: float = 0.85,
+    saturation_gain: float = 1.0,
     neutral_protection: float = 0.9,
     skin_protection: float = 0.55,
     gold_protection: float = 0.7,
     seam_diagnostics: bool = True,
     structure_recolor: bool = False,
-    ink_lightness: float = 0.48,
+    ink_lightness: float = 0.55,
+    ink_expand_px: int = 1,
+    preserve_local_hue: bool = True,
 ) -> dict:
     with manifest_path.open("r", encoding="utf-8") as f:
         plan = json.load(f)
@@ -1556,17 +1633,20 @@ def stitch_tiles(
     if color_mode in legacy_color_modes:
         color_mode = "rgb_stats"
     color_mode = color_mode if color_mode in {"none", "rgb_stats", "lab_reinhard", "seam_balance", "palette_family"} else "none"
-    if structure_recolor and color_mode != "palette_family":
-        raise ValueError("统一灰阶与墨线实验只支持标准色谱迁移模式")
-    if structure_recolor and color_tiles is not None:
-        raise ValueError("统一灰阶与墨线实验请用‘选择图块’限定范围，不要同时填写‘调色图块’")
-    if structure_recolor and low_freq_strength > 0:
-        raise ValueError("统一灰阶与墨线实验已包含联合底灰校正，请关闭旧版低频颜色场校正")
-    if structure_recolor:
-        validate_structure_recolor_selection(plan, selected_tiles)
+    if color_mode == "palette_family":
+        # palette_family = 两阶段流水线：
+        #   第一阶段 全部图块 去色 → 联合灰阶/墨线归一化 → 18 色网格矫正（色卡档位矫正，明度统一消明度缝）
+        #   第二阶段 palette_residual 接缝平衡（只修残余）+ 可选低频颜色场校正
+        structure_recolor = True
+        if color_tiles is not None:
+            raise ValueError("两阶段流水线作用于全部图块（联合灰阶/墨线归一化需要整片），请清空「调色图块」")
+        if selected_tiles:
+            validate_structure_recolor_selection(plan, selected_tiles)
+    elif structure_recolor:
+        raise ValueError("统一灰阶与墨线只支持标准色谱迁移模式")
     if color_mode == "seam_balance":
         seam_balance = True
-    if color_mode == "palette_family" and not structure_recolor:
+    if color_mode == "palette_family":
         seam_balance = True
     feather_px = int(feather_px if feather_px is not None else plan.get("overlap_output_px", 20))
     if seam_balance:
@@ -1589,6 +1669,8 @@ def stitch_tiles(
     palette_preview_path = None
     palette_reference_preview = None
     palette_reference_mean = None
+    substrate_cast_before = None
+    substrate_cast_after = None
     palette_reference_paths = palette_reference_paths or ([] if reference_path is None else [reference_path])
     if color_mode == "palette_family":
         if palette_profile_path:
@@ -1607,10 +1689,27 @@ def stitch_tiles(
                 for image in reference_images:
                     image.close()
         else:
-            raise RuntimeError("标准色谱模式需要选择色谱 JSON，或至少一张标准色彩图")
+            # 兜底：未给色卡时用 manifest 记录的源图作为参考（走自动白平衡提取）
+            fallback = resolve_image_path(str(plan.get("path", "")))
+            if not fallback.exists():
+                raise RuntimeError("标准色谱模式需要选择色谱 JSON，或至少一张标准色彩图")
+            reference_images = [Image.open(fallback).convert("RGB")]
+            try:
+                palette_profile = build_palette_profile(reference_images)
+                palette_json_path = save_palette_profile(palette_profile, out_dir / "standard_palette.json")
+                reference_source = str(fallback)
+            finally:
+                for image in reference_images:
+                    image.close()
         palette_preview_path = render_palette_profile(palette_profile, out_dir / "standard_palette.png")
         if palette_reference_paths:
             with Image.open(palette_reference_paths[0]) as preview_source:
+                palette_reference_preview = preview_source.convert("RGB").copy()
+                palette_reference_preview.thumbnail((640, 640), Image.Resampling.LANCZOS)
+            palette_reference_mean = rounded_rgb_mean(palette_reference_preview)
+        elif palette_preview_path.exists():
+            # 用色卡 JSON 时：comparison 的 reference 直接显示色板预览
+            with Image.open(palette_preview_path) as preview_source:
                 palette_reference_preview = preview_source.convert("RGB").copy()
                 palette_reference_preview.thumbnail((640, 640), Image.Resampling.LANCZOS)
             palette_reference_mean = rounded_rgb_mean(palette_reference_preview)
@@ -1725,16 +1824,17 @@ def stitch_tiles(
             placements.append((tile["tile_id"], paste_x, paste_y, core_img, tile))
     if source_img is not None:
         source_img.close()
+    if color_mode == "palette_family" and yellow_reduction > 0 and placements:
+        substrate_cast_before = estimate_low_chroma_cast(item[3] for item in placements)
     structure_recolor_report = None
     if structure_recolor and placements:
-        if missing or len(placements) != len(selected_tiles or set()):
-            raise ValueError(f"实验选区缺少修复图块：{', '.join(missing)}")
         structure_before = {
             tid: (comparison_thumbnail(img), rounded_rgb_mean(img))
             for tid, _, _, img, _ in placements
         }
         placements, structure_recolor_report = apply_structure_recolor_placements(
-            placements, palette_profile, palette_strength, ink_lightness
+            placements, palette_profile, palette_strength, ink_lightness, saturation_gain, ink_expand_px,
+            preserve_local_hue,
         )
         color_matched = len(placements)
         color_tile_ids = [item[0] for item in placements]
@@ -1797,8 +1897,14 @@ def stitch_tiles(
             color_matched = len(placements)
             color_tile_ids = [p[0] for p in placements]
             color_mode = "seam_balance"
-    if low_freq_strength > 0 and placements:
-        placements = low_frequency_correct_placements(placements, plan, low_freq_strength)
+    if low_freq_strength > 0 and low_freq_mode != "off" and placements:
+        placements = low_frequency_correct_placements(placements, plan, low_freq_strength, low_freq_mode)
+    if substrate_cast_before is not None and placements:
+        substrate_cast_after = estimate_low_chroma_cast(item[3] for item in placements)
+        placements = [
+            (tid, px, py, reduce_warm_cast(img, substrate_cast_before, substrate_cast_after, yellow_reduction), tile)
+            for tid, px, py, img, tile in placements
+        ]
     seam_report = None
     seam_results = []
     if seam_diagnostics and placements:
@@ -1877,6 +1983,10 @@ def stitch_tiles(
         "seam_strength": seam_strength,
         "seam_bias_report": seam_bias_report[:48],
         "low_freq_strength": low_freq_strength,
+        "low_freq_mode": low_freq_mode,
+        "yellow_reduction": yellow_reduction,
+        "substrate_cast_before": substrate_cast_before.tolist() if substrate_cast_before is not None else None,
+        "substrate_cast_after": substrate_cast_after.tolist() if substrate_cast_after is not None else None,
         "palette_profile_path": str(palette_json_path) if palette_json_path else "",
         "palette_preview_path": str(palette_preview_path) if palette_preview_path else "",
         "palette_preview_url": f"/api/preview?path={quote(str(palette_preview_path))}" if palette_preview_path else "",
@@ -1909,7 +2019,10 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, {"error": str(exc)}, 500)
             return
         if parsed.path == "/api/history":
-            json_response(self, {"items": list_manifest_history()})
+            json_response(
+                self,
+                {"items": list_manifest_history(), "stitch_items": load_stitch_history()},
+            )
             return
         if parsed.path.startswith("/outputs/"):
             target = (ROOT / parsed.path.lstrip("/")).resolve()
@@ -1980,10 +2093,11 @@ class Handler(BaseHTTPRequestHandler):
                 output_raw = payload.get("output_dir", "")
                 output = resolve_image_path(output_raw) if output_raw else OUTPUT_DIR / "palettes"
                 output.mkdir(parents=True, exist_ok=True)
+                white_balance = bool(payload.get("white_balance", True))
                 images = []
                 try:
                     images = [Image.open(path).convert("RGB") for path in paths]
-                    profile = build_palette_profile(images)
+                    profile = build_palette_profile(images, white_balance=white_balance)
                 finally:
                     for image in images:
                         image.close()
@@ -2125,20 +2239,28 @@ class Handler(BaseHTTPRequestHandler):
                     bool(payload.get("seam_balance", False)),
                     payload.get("seam_strength", "standard"),
                     float(payload.get("low_freq_strength", 0.0)),
+                    payload.get("low_freq_mode", "auto"),
+                    float(payload.get("yellow_reduction", 0.0)),
                     palette_path,
                     parse_paths(payload.get("palette_reference_paths")),
                     float(payload.get("palette_strength", 0.85)),
+                    float(payload.get("saturation_gain", 1.0)),
                     float(payload.get("neutral_protection", 0.9)),
                     float(payload.get("skin_protection", 0.55)),
                     float(payload.get("gold_protection", 0.7)),
                     bool(payload.get("seam_diagnostics", True)),
                     bool(payload.get("structure_recolor", False)),
-                    float(payload.get("ink_lightness", 0.48)),
+                    float(payload.get("ink_lightness", 0.55)),
+                    int(payload.get("ink_expand_px", 1)),
+                    bool(payload.get("preserve_local_hue", True)),
                 )
+                remember_stitch_history(payload, result)
                 json_response(self, result)
                 return
             json_response(self, {"error": "Unknown endpoint"}, 404)
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             json_response(self, {"error": str(exc)}, 500)
 
     def serve_file(self, path: Path) -> None:
