@@ -4,7 +4,6 @@ import csv
 import hashlib
 import json
 import math
-import mimetypes
 import re
 import subprocess
 import sys
@@ -32,6 +31,8 @@ from color_engine.report import write_seam_report
 from color_engine.seams import analyze_placement_seams
 from experiments.structure_recolor.engine import decompose_tile, joint_grayscale_normalize, recolor_tile
 
+import toolkit_core as core
+
 try:
     import cv2
 except Exception:
@@ -48,9 +49,27 @@ OUTPUT_DIR = ROOT / "outputs"
 PREVIEW_DIR = OUTPUT_DIR / "_previews"
 HISTORY_FILE = OUTPUT_DIR / "manifest_history.json"
 STITCH_HISTORY_FILE = OUTPUT_DIR / "stitch_history.json"
-DEFAULT_PORT = 8765
-APP_NAME = "Xiangliu Grid"
-APP_VERSION = "0.5.0"
+DEFAULT_PORT = core.PORT_MAP["xiangliu-grid"]
+APP_NAME = "相柳网格"
+APP_NAME_EN = "Xiangliu Grid"
+APP_VERSION = "0.6.0"
+
+# --------------------------------------------------------------------------
+# 输入上限（SERIES-SPEC §7 / S5）
+#
+# 旧版对这些参数完全不设防：overlap >= 块边长 时步长会被静默压成 1，
+# 推导出上百万个图块，接口直接把服务拖死。现在越界一律返回 400 + 中文说明。
+# --------------------------------------------------------------------------
+
+MAX_LONG_EDGE = 8192          # 切块边长
+MAX_OVERLAP = 1024            # 重叠像素
+MAX_TARGET_PIECES = 4096      # 目标块数
+MAX_GRID_SIDE = 256           # 行列裁切的最大行数 / 列数
+MAX_TILES_PER_JOB = 20000     # 单次切分最多产出多少图块
+MAX_CANVAS_PIXELS = 4_000_000_000
+MAX_RESIZE_SCALE = 16.0       # 分辨率导出的最大倍数
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024   # 单次上传 2 GB
+
 MAX_STRUCTURE_RECOLOR_TILES = 64
 
 for directory in (INPUT_DIR, OUTPUT_DIR, PREVIEW_DIR):
@@ -196,10 +215,15 @@ def choose_folder_windows(title: str) -> str:
 def json_response(handler: BaseHTTPRequestHandler, payload: dict, status: int = 200) -> None:
     data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     handler.send_response(status)
+    core.apply_cors(handler)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
-    handler.wfile.write(data)
+    try:
+        handler.wfile.write(data)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
 
 
 def load_history() -> list[dict]:
@@ -317,10 +341,76 @@ def remember_stitch_history(payload: dict, result: dict) -> None:
 
 
 def read_json(handler: BaseHTTPRequestHandler) -> dict:
-    length = int(handler.headers.get("Content-Length", "0"))
-    if length <= 0:
-        return {}
-    return json.loads(handler.rfile.read(length).decode("utf-8"))
+    """读取 JSON 请求体，带 1 MB 体积上限（SERIES-SPEC §7 / S3）。"""
+    return core.read_json(handler)
+
+
+def clamp_int(
+    payload: dict, key: str, default: int, low: int, high: int, label: str
+) -> int:
+    """取一个整数参数并夹在 [low, high] 内；越界抛带中文说明的 ValidationError。"""
+    raw = payload.get(key, default)
+    if isinstance(raw, bool) or raw is None or raw == "":
+        raw = default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise core.ValidationError(
+            f"{label}必须是整数。", field=key, detail=f"value={raw!r}")
+    if value < low or value > high:
+        raise core.ValidationError(
+            f"{label}必须在 {low} 到 {high} 之间。", field=key, detail=f"{key}={value}")
+    return value
+
+
+def clamp_float(
+    payload: dict, key: str, default: float, low: float, high: float, label: str
+) -> float:
+    """取一个浮点参数并夹在 [low, high] 内。"""
+    raw = payload.get(key, default)
+    if isinstance(raw, bool) or raw is None or raw == "":
+        raw = default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise core.ValidationError(
+            f"{label}必须是数字。", field=key, detail=f"value={raw!r}")
+    if not math.isfinite(value):
+        raise core.ValidationError(f"{label}不是有效数字。", field=key, detail=f"{key}={raw!r}")
+    if value < low or value > high:
+        raise core.ValidationError(
+            f"{label}必须在 {low} 到 {high} 之间。", field=key, detail=f"{key}={value}")
+    return value
+
+
+def check_tile_budget(plan: dict) -> None:
+    """切图前的总量校验：块数、画布像素，防止一个请求把服务拖死。"""
+    tiles = plan.get("tiles")
+    count = len(tiles) if isinstance(tiles, list) else int(plan.get("tile_count", 0) or 0)
+    if count > MAX_TILES_PER_JOB:
+        raise core.ValidationError(
+            f"这次会切出 {count} 个图块，超过上限 {MAX_TILES_PER_JOB}。"
+            "请增大块尺寸、减少目标块数，或降低重叠。",
+            field="target_pieces", detail=f"tiles={count}")
+    canvas = plan.get("canvas") or {}
+    pixels = int(canvas.get("width", 0) or 0) * int(canvas.get("height", 0) or 0)
+    if pixels > MAX_CANVAS_PIXELS:
+        raise core.ValidationError(
+            "工作画布像素过多（超过 40 亿），请减小块尺寸或目标块数。",
+            field="long_edge", detail=f"pixels={pixels}")
+
+
+def check_overlap(long_edge: int, overlap: int) -> None:
+    """重叠必须小于块边长。
+
+    旧版这里不校验：overlap >= 块边长 时步长会被静默压成 1，
+    于是一张 2048x2048 的图配 块尺寸256/重叠256 就能推导出上百万个图块，
+    接口实测超时，服务被拖死。
+    """
+    if overlap >= long_edge:
+        raise core.ValidationError(
+            "重叠像素必须小于块边长。", field="overlap",
+            detail=f"long_edge={long_edge}, overlap={overlap}")
 
 
 def image_info(path: Path) -> dict:
@@ -2004,41 +2094,52 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: object) -> None:
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
-    def do_GET(self) -> None:
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        core.handle_options(self)
+
+    def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        if parsed.path == "/":
-            self.serve_file(WEB_ROOT / "index.html")
-            return
-        if parsed.path == "/api/preview":
-            qs = parse_qs(parsed.query)
-            path = resolve_image_path(qs.get("path", [""])[0])
-            try:
+        try:
+            if parsed.path == "/api/health":
+                core.api_ok(self, core.health_payload(
+                    "xiangliu-grid", APP_VERSION, self.server.server_address[1],
+                    name=APP_NAME, nameEn=APP_NAME_EN,
+                ))
+                return
+            if parsed.path == "/":
+                self.serve_file(core.safe_join(WEB_ROOT, "index.html"))
+                return
+
+            if parsed.path == "/api/preview":
+                qs = parse_qs(parsed.query)
+                path = resolve_image_path(qs.get("path", [""])[0])
                 preview = ensure_preview(path)
                 self.serve_file(preview)
-            except Exception as exc:
-                json_response(self, {"error": str(exc)}, 500)
-            return
-        if parsed.path == "/api/history":
-            json_response(
-                self,
-                {"items": list_manifest_history(), "stitch_items": load_stitch_history()},
-            )
-            return
-        if parsed.path.startswith("/outputs/"):
-            target = (ROOT / parsed.path.lstrip("/")).resolve()
-            if ROOT in target.parents:
-                self.serve_file(target)
-            else:
-                json_response(self, {"error": "Forbidden"}, 403)
-            return
-        if parsed.path.startswith("/assets/"):
-            target = (ROOT / parsed.path.lstrip("/")).resolve()
-            if ASSET_ROOT == target.parent or ASSET_ROOT in target.parents:
-                self.serve_file(target)
-            else:
-                json_response(self, {"error": "Forbidden"}, 403)
-            return
-        self.serve_file(WEB_ROOT / parsed.path.lstrip("/"))
+                return
+
+            if parsed.path == "/api/history":
+                core.api_ok(self, {
+                    "items": list_manifest_history(),
+                    "stitch_items": load_stitch_history(),
+                })
+                return
+
+            # 下面两个前缀必须走真路径包含校验。
+            # 旧版这里是 (ROOT / path).resolve() + "ROOT in parents"，
+            # 结果 /outputs/../server.py 能把源码读出去。
+            if parsed.path.startswith("/outputs/"):
+                self.serve_file(core.safe_join(OUTPUT_DIR, parsed.path[len("/outputs/"):]))
+                return
+            if parsed.path.startswith("/assets/"):
+                self.serve_file(core.safe_join(ASSET_ROOT, parsed.path[len("/assets/"):]))
+                return
+
+            rel = parsed.path.lstrip("/") or "index.html"
+            if core.serve_static(self, WEB_ROOT, rel):
+                return
+            raise core.NotFoundError(f"找不到页面：{parsed.path}", detail=parsed.path)
+        except Exception as exc:
+            core.api_exception(self, exc)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
@@ -2067,9 +2168,22 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, {"path": picked})
                 return
             if parsed.path == "/api/upload":
-                filename = safe_name(self.headers.get("X-Filename", f"upload_{int(time.time())}.png"))
-                length = int(self.headers.get("Content-Length", "0"))
-                out = INPUT_DIR / filename
+                filename = core.safe_filename(
+                    self.headers.get("X-Filename", ""),
+                    fallback=f"upload_{int(time.time())}.png",
+                )
+                try:
+                    length = int(self.headers.get("Content-Length", "0") or 0)
+                except ValueError:
+                    raise core.ValidationError("Content-Length 不合法。")
+                if length <= 0:
+                    raise core.ValidationError("上传内容为空。")
+                if length > MAX_UPLOAD_BYTES:
+                    raise core.PayloadTooLargeError(
+                        f"图片过大，单次上传上限 {MAX_UPLOAD_BYTES // (1024 ** 3)} GB。",
+                        detail=f"content-length={length}")
+                # 重名不覆盖：自动加 _1 / _2 后缀
+                out = core.unique_path(INPUT_DIR, filename)
                 with out.open("wb") as f:
                     remaining = length
                     while remaining > 0:
@@ -2078,7 +2192,7 @@ class Handler(BaseHTTPRequestHandler):
                             break
                         f.write(chunk)
                         remaining -= len(chunk)
-                json_response(self, {"path": str(out), **image_info(out)})
+                json_response(self, {"ok": True, "path": str(out), **image_info(out)})
                 return
             payload = read_json(self)
             if parsed.path == "/api/inspect":
@@ -2113,16 +2227,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/plan":
                 path = resolve_image_path(payload.get("path", ""))
+                long_edge = clamp_int(payload, "long_edge", 2048, 256, MAX_LONG_EDGE, "块边长")
+                overlap = clamp_int(payload, "overlap", 20, 0, MAX_OVERLAP, "重叠像素")
+                check_overlap(long_edge, overlap)
                 plan = build_plan(
                     path,
-                    int(payload.get("target_pieces", 50)),
-                    int(payload.get("long_edge", 2048)),
-                    int(payload.get("overlap", 20)),
+                    clamp_int(payload, "target_pieces", 50, 1, MAX_TARGET_PIECES, "目标块数"),
+                    long_edge,
+                    overlap,
                     bool(payload.get("allow_upscale", False)),
                     bool(payload.get("strict_count", False)),
-                    int(payload.get("grid_shift_x", 0)),
-                    int(payload.get("grid_shift_y", 0)),
+                    clamp_int(payload, "grid_shift_x", 0, -100000, 100000, "水平分割线平移"),
+                    clamp_int(payload, "grid_shift_y", 0, -100000, 100000, "垂直分割线平移"),
                 )
+                check_tile_budget(plan)
                 plan.pop("tiles")
                 json_response(self, plan)
                 return
@@ -2130,9 +2248,10 @@ class Handler(BaseHTTPRequestHandler):
                 path = resolve_image_path(payload.get("path", ""))
                 plan = build_grid_plan(
                     path,
-                    int(payload.get("rows", 1)),
-                    int(payload.get("cols", 3)),
+                    clamp_int(payload, "rows", 1, 1, MAX_GRID_SIDE, "行数"),
+                    clamp_int(payload, "cols", 3, 1, MAX_GRID_SIDE, "列数"),
                 )
+                check_tile_budget(plan)
                 plan.pop("tiles")
                 json_response(self, plan)
                 return
@@ -2140,17 +2259,20 @@ class Handler(BaseHTTPRequestHandler):
                 path = resolve_image_path(payload.get("path", ""))
                 output_base_raw = payload.get("output_base", "")
                 output_base = resolve_image_path(output_base_raw) if output_base_raw else None
+                long_edge = clamp_int(payload, "long_edge", 2048, 256, MAX_LONG_EDGE, "块边长")
+                overlap = clamp_int(payload, "overlap", 20, 0, MAX_OVERLAP, "重叠像素")
+                check_overlap(long_edge, overlap)
                 result = split_image(
                     path,
-                    int(payload.get("target_pieces", 50)),
-                    int(payload.get("long_edge", 2048)),
-                    int(payload.get("overlap", 20)),
+                    clamp_int(payload, "target_pieces", 50, 1, MAX_TARGET_PIECES, "目标块数"),
+                    long_edge,
+                    overlap,
                     payload.get("job_name", ""),
                     output_base,
                     bool(payload.get("allow_upscale", False)),
                     bool(payload.get("strict_count", False)),
-                    int(payload.get("grid_shift_x", 0)),
-                    int(payload.get("grid_shift_y", 0)),
+                    clamp_int(payload, "grid_shift_x", 0, -100000, 100000, "水平分割线平移"),
+                    clamp_int(payload, "grid_shift_y", 0, -100000, 100000, "垂直分割线平移"),
                 )
                 result["plan"].pop("tiles", None)
                 remember_manifest(Path(result["manifest_json"]), Path(result["tiles_dir"]), payload.get("job_name", ""))
@@ -2162,8 +2284,8 @@ class Handler(BaseHTTPRequestHandler):
                 output_base = resolve_image_path(output_base_raw) if output_base_raw else None
                 result = split_image_grid(
                     path,
-                    int(payload.get("rows", 1)),
-                    int(payload.get("cols", 3)),
+                    clamp_int(payload, "rows", 1, 1, MAX_GRID_SIDE, "行数"),
+                    clamp_int(payload, "cols", 3, 1, MAX_GRID_SIDE, "列数"),
                     payload.get("job_name", ""),
                     output_base,
                 )
@@ -2178,11 +2300,11 @@ class Handler(BaseHTTPRequestHandler):
                 result = resize_export(
                     path,
                     payload.get("edge_mode", "long"),
-                    int(payload.get("target_px", 2048)),
+                    clamp_int(payload, "target_px", 2048, 64, 65536, "目标边长"),
                     payload.get("scale_mode", "edge"),
-                    float(payload.get("scale_factor", 1.0)),
+                    clamp_float(payload, "scale_factor", 1.0, 0.05, MAX_RESIZE_SCALE, "缩放倍数"),
                     payload.get("format", "png"),
-                    int(payload.get("quality", 92)),
+                    clamp_int(payload, "quality", 92, 1, 100, "图片质量"),
                     bool(payload.get("allow_upscale", False)),
                     payload.get("job_name", ""),
                     output_base,
@@ -2257,29 +2379,22 @@ class Handler(BaseHTTPRequestHandler):
                 remember_stitch_history(payload, result)
                 json_response(self, result)
                 return
-            json_response(self, {"error": "Unknown endpoint"}, 404)
+            json_response(self, {"error": {"code": "NOT_FOUND", "message": "找不到接口。"}}, 404)
         except Exception as exc:
             import traceback
             traceback.print_exc()
-            json_response(self, {"error": str(exc)}, 500)
+            core.api_exception(self, exc)
 
     def serve_file(self, path: Path) -> None:
-        if not path.exists() or not path.is_file():
-            json_response(self, {"error": "Not found"}, 404)
-            return
-        content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-        data = path.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        """分块发送文件（SERIES-SPEC §7 / S6），不再把大图整份读进内存。"""
+        core.stream_file(self, path)
 
 
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"{APP_NAME} v{APP_VERSION} running at http://127.0.0.1:{port}")
+    core.print_banner(APP_NAME, APP_NAME_EN, APP_VERSION, port)
+    print(f"  输出目录：{OUTPUT_DIR}")
     server.serve_forever()
 
 

@@ -1,12 +1,33 @@
+# 大云壁画工具箱 · 相柳网格
+# 仓库里只保留源码、文档和品牌资源。规范见 SERIES-SPEC v1.0 §1.2。
+
+# ---- 运行产物 ----
 inputs/
 outputs/
 custom_output_test/
 custom_stitch_test/
-__pycache__/
-*.log
+_previews/
 
-# PyInstaller / release artifacts can be regenerated from xiangliu-grid.spec.
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ---- 日志与临时文件 ----
+*.log
+*.tmp
+
+# ---- 打包产物（可由 xiangliu-grid.spec 重新生成）----
 build/
 dist/
 release/*.exe
 XiangliuGrid-*-setup.exe
+
+# ---- 系统与编辑器 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/

@@ -1,4 +1,4 @@
-# 相柳网格 Xiangliu Grid v0.4.1 使用说明
+# 相柳网格 Xiangliu Grid v0.6.0 使用说明
 
 ## 这是什么工具
 

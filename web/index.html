@@ -469,16 +469,17 @@
     <div class="brand">
       <img src="/assets/logo.png" alt="">
       <div>
-        <h1>Xiangliu Grid</h1>
-        <div class="version">Xiangliu Grid v0.5.0</div>
+        <h1>相柳网格 Xiangliu Grid</h1>
+        <div class="version">大云壁画工具箱 · v0.6.0</div>
       </div>
     </div>
     <div class="headerTools">
     <nav>
       <button class="tab active" data-page="splitPage">1 图块裁切</button>
-      <button class="tab" data-page="stitchPage">2 整图拼合</button>
-      <button class="tab" data-page="quickPage">3 行列裁切</button>
-      <button class="tab" data-page="resizePage">4 分辨率导出</button>
+      <button class="tab" data-page="patchPage">2 局部回贴</button>
+      <button class="tab" data-page="stitchPage">3 整图拼合</button>
+      <button class="tab" data-page="quickPage">4 行列裁切</button>
+      <button class="tab" data-page="resizePage">5 分辨率导出</button>
     </nav>
     <button id="themeToggle" class="themeToggle" type="button">深色</button>
     </div>
@@ -891,14 +892,28 @@
         body: JSON.stringify(payload)
       });
       const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || res.statusText);
+      if (!res.ok || data.error) throw new Error(errText(data, res.statusText));
       return data;
+    }
+
+    /**
+     * 后端统一错误结构是 {error: {code, message, field, detail}}。
+     * 这里把它还原成一句能直接给用户看的中文，同时兼容旧版的纯字符串形式。
+     */
+    function errText(data, fallback) {
+      if (!data) return fallback || "请求失败";
+      const err = data.error;
+      if (typeof err === "string") return err;
+      if (err && typeof err === "object") {
+        return err.detail ? (err.message + "（" + err.detail + "）") : (err.message || fallback);
+      }
+      return data.message || fallback || "请求失败";
     }
 
     async function get(url) {
       const res = await fetch(apiUrl(url));
       const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || res.statusText);
+      if (!res.ok || data.error) throw new Error(errText(data, res.statusText));
       return data;
     }
 
@@ -1357,7 +1372,7 @@
           body: file
         });
         const data = await res.json();
-        if (data.error) throw new Error(data.error);
+        if (data.error) throw new Error(errText(data, "上传失败"));
         await inspectPath(data.path, target);
       } catch (err) {
         log("上传/读取失败：" + err.message);

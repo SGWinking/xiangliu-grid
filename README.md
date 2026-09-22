@@ -1,6 +1,8 @@
 # Xiangliu Grid / 相柳网格
 
-**Version:** `0.5.1`
+**Version:** `0.6.0`
+
+本工具是 **大云壁画工具箱**的一员（相柳网格 · 精卫 · 白泽评审 · 重明 DiffEye）。图像算法保持不变，本版为系列化交付（安全修复 + 统一外壳）。详见 [CHANGELOG.md](CHANGELOG.md)。
 
 <img src="assets/logo.png" alt="Xiangliu Grid logo" width="180">
 

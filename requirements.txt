@@ -1,0 +1,6 @@
+Pillow>=9.0
+numpy>=1.23
+
+# 可选增强：装了 OpenCV，千万像素级大图的缩放会走 LANCZOS4（C++ 实现，快很多）。
+# 不装也能跑，会自动退回 Pillow，只是慢一些。
+# opencv-python>=4.6
