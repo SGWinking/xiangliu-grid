@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="相柳网格 Xiangliu Grid">
+  <title>相柳网格 · Xiangliu Grid</title>
+  <!--
+    忠实矢量化自作者原图 assets/logo.png（2048×2048）：
+    3×3 个旋转 45° 的方块 = 图块网格，方块之间留白；
+    每个方块上一对窄叶形眼，上端向外撇 = 相柳九首。
+    原图是位图，渲染成 40px 角标要传 2.4MB，这份 SVG 约 1.5KB。
+  -->
+  <defs>
+    <g id="head">
+      <!-- 菱形：半对角 8.4，中心间距 18.7，之间留出约 2 的白缝 -->
+      <path d="M0 -8.4 8.4 0 0 8.4 -8.4 0Z" fill="#14315b" />
+      <!-- 一对窄眼：高约 3.4，上端尖、下端收，顶向外撇 -->
+      <path d="M0 -1.8C0.85 -1.05 0.95 0.35 0.25 1.75 -0.5 0.95 -0.75 -0.55 0 -1.8Z"
+            fill="#ffffff" transform="translate(1.85 -0.55) rotate(21)" />
+      <path d="M0 -1.8C-0.85 -1.05 -0.95 0.35 -0.25 1.75 0.5 0.95 0.75 -0.55 0 -1.8Z"
+            fill="#ffffff" transform="translate(-1.85 -0.55) rotate(-21)" />
+    </g>
+  </defs>
+
+  <g transform="translate(13.3 13.3)"><use href="#head"/></g>
+  <g transform="translate(32 13.3)"><use href="#head"/></g>
+  <g transform="translate(50.7 13.3)"><use href="#head"/></g>
+  <g transform="translate(13.3 32)"><use href="#head"/></g>
+  <g transform="translate(32 32)"><use href="#head"/></g>
+  <g transform="translate(50.7 32)"><use href="#head"/></g>
+  <g transform="translate(13.3 50.7)"><use href="#head"/></g>
+  <g transform="translate(32 50.7)"><use href="#head"/></g>
+  <g transform="translate(50.7 50.7)"><use href="#head"/></g>
+</svg>
