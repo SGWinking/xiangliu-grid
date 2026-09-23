@@ -22,8 +22,7 @@ venv/
 # ---- 打包产物（可由 xiangliu-grid.spec 重新生成）----
 build/
 dist/
-release/*.exe
-XiangliuGrid-*-setup.exe
+release/
 
 # ---- 系统与编辑器 ----
 .DS_Store
