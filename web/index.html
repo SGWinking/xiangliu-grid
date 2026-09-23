@@ -20,6 +20,7 @@
       --accent: #7f1d1d;
       --accent-2: #991b1b;
       --accent-soft: #fff1f1;
+      --accent-line: #eccfcf;
       --teal: #0f766e;
       --cream: #f7f3ea;
       --shadow: rgba(15, 23, 42, .08);
@@ -39,6 +40,7 @@
       --accent: #8b2b2b;
       --accent-2: #a43a3a;
       --accent-soft: #2b1f1f;
+      --accent-line: #5a2e2e;
       --teal: #2f9b8f;
       --cream: #d4d0c4;
       --shadow: rgba(0,0,0,.32);
@@ -108,6 +110,8 @@
       background: var(--accent);
       color: #fff;
     }
+    /* button:hover 会给标签页 accent-2 深红底，但文字仍是 muted 灰，看不清；补成白字 */
+    .tab:hover { color: #fff; }
     .headerTools {
       display: flex;
       align-items: center;
@@ -241,6 +245,7 @@
       cursor: pointer;
       font-size: 18px;
     }
+    .drop:hover { border-color: var(--accent-line); }
     .drop.drag {
       border-color: var(--accent);
       background: var(--accent-soft);
@@ -429,6 +434,8 @@
       font-size: 15px;
       overflow-wrap: anywhere;
     }
+    /* 历史条目是按钮但自有规则把底色固定成透明，button:hover 够不着它；给可点的条目一个悬停底色 */
+    .history button:hover:not(:disabled) { background: var(--accent-soft); }
     .check {
       display: flex;
       gap: 10px;
@@ -463,7 +470,9 @@
       .headerTools { width: 100%; flex-wrap: wrap; }
       .tab { flex: 1; }
     }
-  
+    /* Status 框在没有日志时是一块空白，给它一个和 Output 的 "-" 同级的占位 */
+    #log:empty::before { content: "尚未运行"; color: var(--muted); }
+
 /* ==========================================================================
    交互层（系列统一）
 
